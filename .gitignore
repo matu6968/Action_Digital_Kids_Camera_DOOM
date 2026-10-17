@@ -1,0 +1,20 @@
+# build output
+firmware/build*/
+firmware/build.log
+build-spi/
+tools/rescue/build/
+toolchain/build/
+toolchain/install/
+third_party/
+
+# your own backups
+backups/
+*.bak
+
+# python / editors / OS
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+*.swp
+.DS_Store

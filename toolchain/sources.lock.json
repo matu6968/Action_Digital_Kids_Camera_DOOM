@@ -1,0 +1,44 @@
+{
+  "target": "or1k-appotech-elf",
+  "abi": "little endian; no delay; link PC+4; software multiply/divide/float",
+  "target_cflags": "-Os -mappotech -fno-delayed-branch -fno-pic -ffunction-sections -fdata-sections",
+  "picolibc_options": {
+    "multilib": false,
+    "picocrt": false,
+    "semihost": false,
+    "single-thread": true,
+    "thread-local-storage": false,
+    "format-default": "integer",
+    "io-long-long": true,
+    "posix-console": false,
+    "atomic-ungetc": false,
+    "printf-small-ultoa": true,
+    "initfini-array": false,
+    "sysroot-install": true,
+    "system-libc": true
+  },
+  "sources": {
+    "gcc": {
+      "baseline": "71b50793e1e2b12b36baff23c1211e43b8c86ecd",
+      "patch": "patches/gcc-jt5295.patch",
+      "patch_sha256": "03e0b77cac22b578cedad5ab04a2e4b1bd43a9e7f8b46b02dca87f8fe397ea79",
+      "version": "16.2.1",
+      "branch": "gcc16-openrisc-appotech"
+    },
+    "binutils": {
+      "baseline": "6ce87bbc521cf46eaee9a1f7ef61cee2cdfb3e32",
+      "patch": "patches/binutils-jt5295.patch",
+      "patch_sha256": "31425b33a5b9461743aaeae92091060fed7b8cf4f4d10f9e3040e48511975cc4",
+      "version": "2.47",
+      "branch": "binutils-openrisc-appotech"
+    },
+    "picolibc": {
+      "baseline": "2ae376c6cdf4fef90ca2388ecf7a07457fa63cff",
+      "patch": "patches/picolibc-jt5295.patch",
+      "patch_sha256": "56dabdf28062e5840156083de88d03d9b11e0d0ad6ed44bcc863ae3cebb7512e",
+      "version": "1.8.12",
+      "tag": "1.8.12",
+      "url": "https://github.com/picolibc/picolibc.git"
+    }
+  }
+}

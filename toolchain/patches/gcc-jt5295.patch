@@ -1,0 +1,262 @@
+diff --git a/gcc/config/or1k/elf.h b/gcc/config/or1k/elf.h
+index b494bddde60..8fef182605c 100644
+--- a/gcc/config/or1k/elf.h
++++ b/gcc/config/or1k/elf.h
+@@ -25,13 +25,16 @@
+ #define LIB_SPEC "--start-group -lc -lor1k "			\
+   "%{mboard=*:-lboard-%*; :-lboard-or1ksim} --end-group"
+ 
++#undef ASM_SPEC
++#define ASM_SPEC "%{mappotech|mlittle-endian:-EL;:-EB}"
++
+ #undef	LINK_SPEC
+ #define LINK_SPEC "%{h*}			\
+    %{static:-Bstatic}				\
+    %{shared:-shared}				\
+    %{symbolic:-Bsymbolic}			\
+    %{!static:%{rdynamic:-export-dynamic}}	\
+-   --entry=0x100"
++   %{mappotech|mlittle-endian:-EL;:-EB} --entry=0x100"
+ 
+ #undef  STARTFILE_SPEC
+ #define STARTFILE_SPEC "crt0.o%s crtbegin.o%s"
+diff --git a/gcc/config/or1k/or1k.cc b/gcc/config/or1k/or1k.cc
+index ccb23dd2aad..b46d1840bec 100644
+--- a/gcc/config/or1k/or1k.cc
++++ b/gcc/config/or1k/or1k.cc
+@@ -98,6 +98,14 @@ or1k_option_override (void)
+ {
+   /* Set the per-function-data initializer.  */
+   init_machine_status = or1k_init_machine_status;
++  if (TARGET_APPOTECH)
++    {
++      target_flags |= MASK_LITTLE_ENDIAN | MASK_SOFT_MUL | MASK_SOFT_DIV;
++      target_flags &= ~MASK_HARD_FLOAT;
++      flag_delayed_branch = 0;
++      if (flag_pic)
++        error ("-mappotech does not yet support position-independent code");
++    }
+ }
+ 
+ /* Returns true if REGNO must be saved for the current function.  */
+@@ -2280,6 +2288,17 @@ or1k_libm_function_max_error (unsigned cfn, machine_mode mode,
+   return default_libm_function_max_error (cfn, mode, boundary_p);
+ }
+ 
++/* JT5295 calls return to PC+4. Keep NOP slots but mark the actual ISA. */
++static void
++or1k_asm_file_start (void)
++{
++  default_file_start ();
++  if (TARGET_APPOTECH)
++    fputs ("\t.nodelay\n", asm_out_file);
++}
++#undef TARGET_ASM_FILE_START
++#define TARGET_ASM_FILE_START or1k_asm_file_start
++
+ #undef  TARGET_ASM_OUTPUT_MI_THUNK
+ #define TARGET_ASM_OUTPUT_MI_THUNK or1k_output_mi_thunk
+ #undef  TARGET_ASM_CAN_OUTPUT_MI_THUNK
+diff --git a/gcc/config/or1k/or1k.h b/gcc/config/or1k/or1k.h
+index af043f8c2d9..0baec906281 100644
+--- a/gcc/config/or1k/or1k.h
++++ b/gcc/config/or1k/or1k.h
+@@ -28,7 +28,10 @@
+   do						\
+     {						\
+       builtin_define ("__OR1K__");		\
+-      builtin_define ("__OR1K_DELAY__");	\
++      if (TARGET_APPOTECH)			\
++        { builtin_define ("__APPOTECH_JT5295__"); \
++          builtin_define ("__OR1K_NODELAY__"); } \
++      else builtin_define ("__OR1K_DELAY__"); \
+       builtin_define ("__or1k__");		\
+       if (TARGET_CMOV)				\
+ 	builtin_define ("__or1k_cmov__");	\
+@@ -48,8 +51,8 @@
+ 
+ #define DEFAULT_SIGNED_CHAR 1
+ #define BITS_BIG_ENDIAN 0
+-#define BYTES_BIG_ENDIAN 1
+-#define WORDS_BIG_ENDIAN 1
++#define BYTES_BIG_ENDIAN (!TARGET_LITTLE_ENDIAN)
++#define WORDS_BIG_ENDIAN (!TARGET_LITTLE_ENDIAN)
+ #define BITS_PER_WORD 32
+ #define UNITS_PER_WORD 4
+ #define POINTER_SIZE 32
+diff --git a/gcc/config/or1k/or1k.opt b/gcc/config/or1k/or1k.opt
+index 146e0f9f0c0..5a5c4c5a0bd 100644
+--- a/gcc/config/or1k/or1k.opt
++++ b/gcc/config/or1k/or1k.opt
+@@ -114,3 +114,15 @@ Target RejectNegative Mask(SHFTIMM)
+ Enable generation of shift with immediate (l.srai, l.srli, l.slli) instructions.
+ By default extra instructions are generated to store the immediate to a
+ register first.
++
++mlittle-endian
++Target RejectNegative Mask(LITTLE_ENDIAN)
++Generate little-endian code and data.
++
++mbig-endian
++Target RejectNegative InverseMask(LITTLE_ENDIAN)
++Generate big-endian code and data (the default).
++
++mappotech
++Target Mask(APPOTECH)
++Generate little-endian JT5295 code with inert branch slots.
+diff --git a/libgcc/config/or1k/lib1funcs.S b/libgcc/config/or1k/lib1funcs.S
+index b530d71b453..db32d6410a3 100644
+--- a/libgcc/config/or1k/lib1funcs.S
++++ b/libgcc/config/or1k/lib1funcs.S
+@@ -19,6 +19,10 @@ a copy of the GCC Runtime Library Exception along with this program;
+ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
+ <http://www.gnu.org/licenses/>.  */
+ 
++#ifdef __APPOTECH_JT5295__
++#include "appotech-lib1funcs.S"
++#else
++
+ /* An executable stack is *not* required for these functions.  */
+ #ifdef __linux__
+ .section .note.GNU-stack,"",%progbits
+@@ -225,3 +229,5 @@ __modsi3:
+ 	.cfi_endproc
+ 	.size __modsi3, .- __modsi3
+ #endif
++
++#endif /* __APPOTECH_JT5295__ */
+diff --git a/libgcc/config/or1k/sfp-machine.h b/libgcc/config/or1k/sfp-machine.h
+index c804270fb3c..72ff03edc11 100644
+--- a/libgcc/config/or1k/sfp-machine.h
++++ b/libgcc/config/or1k/sfp-machine.h
+@@ -82,7 +82,7 @@ do {								\
+ #define	__LITTLE_ENDIAN	1234
+ #define	__BIG_ENDIAN	4321
+ 
+-#define __BYTE_ORDER __BIG_ENDIAN
++#define __BYTE_ORDER __BYTE_ORDER__
+ 
+ #define _FP_TININESS_AFTER_ROUNDING 0
+ 
+diff --git a/libgcc/config/or1k/appotech-lib1funcs.S b/libgcc/config/or1k/appotech-lib1funcs.S
+new file mode 100644
+index 00000000000..b202680dc84
+--- /dev/null
++++ b/libgcc/config/or1k/appotech-lib1funcs.S
+@@ -0,0 +1,116 @@
++/* JT5295 no-delay variants. Same GPL/Runtime Library Exception as lib1funcs.S. */
++    .nodelay
++    .text
++#ifdef L__mulsi3
++    .global __mulsi3
++    .type __mulsi3,@function
++__mulsi3:
++    l.ori r11,r0,0
++1:  l.sfeq r4,r0
++    l.bf 3f
++    l.nop
++    l.andi r5,r4,1
++    l.sfeq r5,r0
++    l.bf 2f
++    l.nop
++    l.add r11,r11,r3
++2:  l.slli r3,r3,1
++    l.srli r4,r4,1
++    l.j 1b
++    l.nop
++3:  l.jr r9
++    l.nop
++    .size __mulsi3,.-__mulsi3
++#endif
++#ifdef L__udivsi3
++    .global __udivsi3
++    .global __udivmodsi3_internal
++    .hidden __udivmodsi3_internal
++    .type __udivsi3,@function
++__udivsi3:
++__udivmodsi3_internal:
++    l.ori r11,r0,0
++    l.ori r12,r3,0
++    l.sfeq r4,r0
++    l.bf 5f
++    l.nop
++    l.ori r6,r0,1
++1:  l.sflts r4,r0
++    l.bf 2f
++    l.nop
++    l.sfltu r4,r12
++    l.bnf 2f
++    l.nop
++    l.slli r4,r4,1
++    l.slli r6,r6,1
++    l.j 1b
++    l.nop
++2:  l.sfleu r4,r12
++    l.bnf 3f
++    l.nop
++    l.sub r12,r12,r4
++    l.or r11,r11,r6
++3:  l.srli r4,r4,1
++    l.srli r6,r6,1
++    l.sfne r6,r0
++    l.bf 2b
++    l.nop
++5:  l.jr r9
++    l.nop
++    .size __udivsi3,.-__udivsi3
++#endif
++#ifdef L__umodsi3
++    .global __umodsi3
++    .type __umodsi3,@function
++__umodsi3:
++    l.ori r13,r9,0
++    l.jal __udivmodsi3_internal
++    l.nop
++    l.ori r11,r12,0
++    l.jr r13
++    l.nop
++    .size __umodsi3,.-__umodsi3
++#endif
++#if defined(L__divsi3) || defined(L__modsi3)
++#ifdef L__divsi3
++    .global __divsi3
++    .type __divsi3,@function
++__divsi3:
++    l.xor r6,r3,r4
++#else
++    .global __modsi3
++    .type __modsi3,@function
++__modsi3:
++    l.ori r6,r3,0
++#endif
++    l.addi r1,r1,-8
++    l.sw 0(r1),r9
++    l.sw 4(r1),r6
++    l.sflts r3,r0
++    l.bnf 1f
++    l.nop
++    l.sub r3,r0,r3
++1:  l.sflts r4,r0
++    l.bnf 2f
++    l.nop
++    l.sub r4,r0,r4
++2:  l.jal __udivmodsi3_internal
++    l.nop
++#ifdef L__modsi3
++    l.ori r11,r12,0
++#endif
++    l.lwz r6,4(r1)
++    l.lwz r9,0(r1)
++    l.addi r1,r1,8
++    l.sflts r6,r0
++    l.bnf 3f
++    l.nop
++    l.sub r11,r0,r11
++3:  l.jr r9
++    l.nop
++#ifdef L__divsi3
++    .size __divsi3,.-__divsi3
++#else
++    .size __modsi3,.-__modsi3
++#endif
++#endif

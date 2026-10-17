@@ -1,0 +1,104 @@
+--- a/ff.c
++++ b/ff.c
+@@ -22,6 +22,8 @@
+ #include <string.h>
+ #include "ff.h"			/* Basic definitions and declarations of API */
+ #include "diskio.h"		/* Declarations of MAI */
++/* SDK cooperative service during CPU-only exFAT table generation. */
++extern void ff_appotech_progress(void);
+ 
+ /*--------------------------------------------------------------------------
+ 
+@@ -470,6 +472,9 @@
+ 
+ #if FF_FS_LOCK
+ static FILESEM Files[FF_FS_LOCK];	/* Open object lock semaphores */
++/* SDK: FatFs omits root directory iterators from Files[]. */
++static FATFS *AppotechRootFs[FF_VOLUMES];
++static UINT AppotechRootDirs[FF_VOLUMES];
+ #if FF_FS_REENTRANT
+ static volatile BYTE SysLock;		/* System lock flag to protect Files[] (0:no mutex, 1:unlocked, 2:locked) */
+ static volatile BYTE SysLockVolume;	/* Volume id who is locking Files[] */
+@@ -1044,6 +1049,9 @@
+ 	for (i = 0; i < FF_FS_LOCK; i++) {
+ 		if (Files[i].fs == fs) Files[i].fs = 0;
+ 	}
++    for (i = 0; i < FF_VOLUMES; i++) {
++        if (AppotechRootFs[i] == fs) { AppotechRootFs[i] = 0; AppotechRootDirs[i] = 0; }
++    }
+ }
+ 
+ #endif	/* FF_FS_LOCK */
+@@ -4758,6 +4766,10 @@
+ 						if (!dp->obj.lockid) res = FR_TOO_MANY_OPEN_FILES;
+ 					} else {
+ 						dp->obj.lockid = 0;	/* Root directory does not need to be locked */
++                        UINT v;
++                        for (v = 0; v < FF_VOLUMES; v++) {
++                            if (FatFs[v] == fs) { AppotechRootFs[v] = fs; AppotechRootDirs[v]++; break; }
++                        }
+ 					}
+ 				}
+ #endif
+@@ -4790,6 +4802,12 @@
+ 	if (res == FR_OK) {
+ #if FF_FS_LOCK
+ 		if (dp->obj.lockid) res = dec_share(dp->obj.lockid);	/* Decrement sub-directory open counter */
++        else {
++            UINT v;
++            for (v = 0; v < FF_VOLUMES; v++) {
++                if (AppotechRootFs[v] == fs && AppotechRootDirs[v]) { AppotechRootDirs[v]--; break; }
++            }
++        }
+ 		if (res == FR_OK) dp->obj.fs = 0;	/* Invalidate directory object */
+ #else
+ 		dp->obj.fs = 0;	/* Invalidate directory object */
+@@ -6215,13 +6233,16 @@
+ 		sum = 0;							/* Table checksum to be stored in the 82 entry */
+ 		st = 0; si = 0; i = 0; j = 0; szb_case = 0;
+ 		do {
++            if (!(si & 255)) ff_appotech_progress();
+ 			switch (st) {
+ 			case 0:
+ 				ch = (WCHAR)ff_wtoupper(si);	/* Get an up-case char */
+ 				if (ch != si) {
+ 					si++; break;		/* Store the up-case char if exist */
+ 				}
+-				for (j = 1; (WCHAR)(si + j) && (WCHAR)(si + j) == ff_wtoupper((WCHAR)(si + j)); j++) ;	/* Get run length of no-case block */
++				for (j = 1; (WCHAR)(si + j) && (WCHAR)(si + j) == ff_wtoupper((WCHAR)(si + j)); j++) {
++                    if (!(j & 255)) ff_appotech_progress();
++                }	/* Get run length of no-case block */
+ 				if (j >= 128) {
+ 					ch = 0xFFFF; st = 2; break;	/* Compress the no-case block if run is >= 128 chars */
+ 				}
+@@ -7247,3 +7268,30 @@
+ }
+ #endif	/* FF_CODE_PAGE == 0 */
+ 
++
++/* AppoTech SDK port: retain upstream object locks during sync/format/unmount.
++ * Single cooperative task (FF_FS_REENTRANT=0). See research/sd-write.md. */
++int ff_appotech_volume_busy (const FATFS* fs)
++{
++#if FF_FS_LOCK
++    UINT i;
++    for (i = 0; i < FF_VOLUMES; i++) {
++        if (AppotechRootFs[i] == fs && AppotechRootDirs[i]) return 1;
++    }
++    for (i = 0; i < FF_FS_LOCK; i++) {
++        if (Files[i].fs == fs && Files[i].ctr) return 1;
++    }
++#else
++    (void)fs;
++#endif
++    return 0;
++}
++FRESULT ff_appotech_sync_volume (FATFS* fs)
++{
++    if (!fs || !fs->fs_type) return FR_INVALID_OBJECT;
++#if !FF_FS_READONLY
++    return sync_fs(fs);
++#else
++    return disk_ioctl(fs->pdrv, CTRL_SYNC, 0) == RES_OK ? FR_OK : FR_DISK_ERR;
++#endif
++}

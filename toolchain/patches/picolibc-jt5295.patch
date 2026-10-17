@@ -1,0 +1,69 @@
+diff --git a/libc/include/machine/ieeefp.h b/libc/include/machine/ieeefp.h
+index 1994005..fcbeeba 100644
+--- a/libc/include/machine/ieeefp.h
++++ b/libc/include/machine/ieeefp.h
+@@ -465,8 +465,12 @@ warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ #endif
+ 
+ #if defined(__or1k__) || defined(__OR1K__) || defined(__OR1KND__)
++#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
++#define __IEEE_LITTLE_ENDIAN
++#else
+ #define __IEEE_BIG_ENDIAN
+ #endif
++#endif
+ 
+ #ifdef __IP2K__
+ #define __IEEE_BIG_ENDIAN
+diff --git a/libc/machine/or1k/setjmp.S b/libc/machine/or1k/setjmp.S
+index 2d7f771..a2f49bf 100644
+--- a/libc/machine/or1k/setjmp.S
++++ b/libc/machine/or1k/setjmp.S
+@@ -25,6 +25,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+ 
+ #include <picolibc.h>
++#ifdef __APPOTECH_JT5295__
++.nodelay
++#endif
+ 
+ .align  4
+ .global setjmp
+@@ -48,13 +51,19 @@ setjmp:
+ 	l.sw	40(r3), r28
+ 	l.sw	44(r3), r30
+ 	/* Save Status Register */
++#ifdef __APPOTECH_JT5295__
++	/* C setjmp does not preserve CPU status; standard SPR 17 is unverified. */
++	l.ori r13, r0, 0
++#else
+ 	l.mfspr	r13, r0, 17
++#endif
+ 	l.sw	48(r3), r13
+ /* Set result register to 0 and jump */
+ // Different cases for optional delay slot
+ #if defined(__OR1K_NODELAY__)
+ 	l.addi	r11, r0, 0
+ 	l.jr	r9
++	l.nop
+ #elif defined(__OR1K_DELAY__)
+ 	l.jr	r9
+ 	l.addi	r11, r0, 0
+@@ -80,7 +89,9 @@ longjmp:
+   /* Load status register */
+ 1: 
+ 	l.lwz	r15, 48(r3)
++#ifndef __APPOTECH_JT5295__
+ 	l.mtspr	r0, r15, 17
++#endif
+ 
+ 	l.lwz	r1, 0(r3)
+ 	l.lwz	r2, 4(r3)
+@@ -100,6 +111,7 @@ longjmp:
+ #if defined(__OR1K_NODELAY__)
+ 	l.lwz	r30, 44(r3)
+ 	l.jr	r9
++	l.nop
+ #elif defined(__OR1K_DELAY__)
+ 	l.jr	r9
+ 	l.lwz	r30, 44(r3)

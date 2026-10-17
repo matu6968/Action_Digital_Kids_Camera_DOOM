@@ -1,0 +1,160 @@
+diff --git a/bfd/config.bfd b/bfd/config.bfd
+index 02a1a68525e..d96ec7adba8 100644
+--- a/bfd/config.bfd
++++ b/bfd/config.bfd
+@@ -963,10 +963,12 @@ case "${targ}" in
+ 
+   or1k-*-elf | or1k-*-linux* | or1k-*-rtems*)
+     targ_defvec=or1k_elf32_vec
++    targ_selvecs="or1k_elf32_le_vec"
+     ;;
+ 
+   or1knd-*-elf | or1knd-*-linux* | or1knd-*-rtems*)
+     targ_defvec=or1k_elf32_vec
++    targ_selvecs="or1k_elf32_le_vec"
+     ;;
+ 
+   pdp11-*-*)
+diff --git a/bfd/configure b/bfd/configure
+index 1b829384c0c..895ca3d2489 100755
+--- a/bfd/configure
++++ b/bfd/configure
+@@ -16018,7 +16018,7 @@ do
+     nfp_elf64_vec)		 tb="$tb elf64-nfp.lo elf64.lo $elf" ;;
+     ns32k_aout_pc532mach_vec)	 tb="$tb pc532-mach.lo aout-ns32k.lo" ;;
+     ns32k_aout_pc532nbsd_vec)	 tb="$tb ns32knetbsd.lo aout-ns32k.lo" ;;
+-    or1k_elf32_vec)		 tb="$tb elf32-or1k.lo elf32.lo $elf" ;;
++    or1k_elf32_vec | or1k_elf32_le_vec) tb="$tb elf32-or1k.lo elf32.lo $elf" ;;
+     pdb_vec)			 tb="$tb pdb.lo" ;;
+     pdp11_aout_vec)		 tb="$tb pdp11.lo" ;;
+     pef_vec)			 tb="$tb pef.lo" ;;
+diff --git a/bfd/configure.ac b/bfd/configure.ac
+index c30a75ba8b7..034ab5eabdc 100644
+--- a/bfd/configure.ac
++++ b/bfd/configure.ac
+@@ -559,7 +559,7 @@ do
+     nfp_elf64_vec)		 tb="$tb elf64-nfp.lo elf64.lo $elf" ;;
+     ns32k_aout_pc532mach_vec)	 tb="$tb pc532-mach.lo aout-ns32k.lo" ;;
+     ns32k_aout_pc532nbsd_vec)	 tb="$tb ns32knetbsd.lo aout-ns32k.lo" ;;
+-    or1k_elf32_vec)		 tb="$tb elf32-or1k.lo elf32.lo $elf" ;;
++    or1k_elf32_vec | or1k_elf32_le_vec) tb="$tb elf32-or1k.lo elf32.lo $elf" ;;
+     pdb_vec)			 tb="$tb pdb.lo" ;;
+     pdp11_aout_vec)		 tb="$tb pdp11.lo" ;;
+     pef_vec)			 tb="$tb pef.lo" ;;
+diff --git a/bfd/elf32-or1k.c b/bfd/elf32-or1k.c
+index ab5b2f495f8..3ac2d3ef87f 100644
+--- a/bfd/elf32-or1k.c
++++ b/bfd/elf32-or1k.c
+@@ -3380,6 +3380,8 @@ or1k_grok_psinfo (bfd *abfd, Elf_Internal_Note *note)
+ 
+ #define TARGET_BIG_SYM			or1k_elf32_vec
+ #define TARGET_BIG_NAME			"elf32-or1k"
++#define TARGET_LITTLE_SYM                 or1k_elf32_le_vec
++#define TARGET_LITTLE_NAME                "elf32-or1k-little"
+ 
+ #define elf_info_to_howto_rel		NULL
+ #define elf_info_to_howto		or1k_info_to_howto_rela
+diff --git a/bfd/targets.c b/bfd/targets.c
+index fcf650410dc..9801ffd5dd3 100644
+--- a/bfd/targets.c
++++ b/bfd/targets.c
+@@ -838,6 +838,7 @@ extern const bfd_target nfp_elf64_vec;
+ extern const bfd_target ns32k_aout_pc532mach_vec;
+ extern const bfd_target ns32k_aout_pc532nbsd_vec;
+ extern const bfd_target or1k_elf32_vec;
++extern const bfd_target or1k_elf32_le_vec;
+ extern const bfd_target pdb_vec;
+ extern const bfd_target pdp11_aout_vec;
+ extern const bfd_target pef_vec;
+@@ -1219,6 +1220,7 @@ static const bfd_target * const _bfd_target_vector[] =
+ 	&ns32k_aout_pc532nbsd_vec,
+ 
+ 	&or1k_elf32_vec,
++	&or1k_elf32_le_vec,
+ 
+ 	&pdb_vec,
+ 
+diff --git a/gas/config/tc-or1k.c b/gas/config/tc-or1k.c
+index 798cf6d6acc..f9af9f5751f 100644
+--- a/gas/config/tc-or1k.c
++++ b/gas/config/tc-or1k.c
+@@ -60,6 +60,8 @@ const char md_shortopts[] = OR1K_SHORTOPTS;
+ 
+ const struct option md_longopts[] =
+ {
++  {"EB", no_argument, NULL, OPTION_MD_BASE},
++  {"EL", no_argument, NULL, OPTION_MD_BASE + 1},
+   {NULL, no_argument, NULL, 0}
+ };
+ const size_t md_longopts_size = sizeof (md_longopts);
+@@ -69,12 +71,15 @@ unsigned long or1k_machine = 0; /* default */
+ int
+ md_parse_option (int c ATTRIBUTE_UNUSED, const char * arg ATTRIBUTE_UNUSED)
+ {
++  if (c == OPTION_MD_BASE) { target_big_endian = 1; return 1; }
++  if (c == OPTION_MD_BASE + 1) { target_big_endian = 0; return 1; }
+   return 0;
+ }
+ 
+ void
+-md_show_usage (FILE * stream ATTRIBUTE_UNUSED)
++md_show_usage (FILE * stream)
+ {
++  fprintf (stream, _("  -EB generate big-endian objects (default)\n  -EL generate little-endian objects\n"));
+ }
+ 
+ static void
+@@ -110,7 +115,7 @@ md_begin (void)
+   /* Set the machine number and endian.  */
+   gas_cgen_cpu_desc = or1k_cgen_cpu_open (CGEN_CPU_OPEN_MACHS, 0,
+                                               CGEN_CPU_OPEN_ENDIAN,
+-                                              CGEN_ENDIAN_BIG,
++                                              target_big_endian ? CGEN_ENDIAN_BIG : CGEN_ENDIAN_LITTLE,
+                                               CGEN_CPU_OPEN_END);
+   or1k_cgen_init_asm (gas_cgen_cpu_desc);
+ 
+@@ -266,7 +271,8 @@ md_cgen_lookup_reloc (const CGEN_INSN *    insn ATTRIBUTE_UNUSED,
+ void
+ md_number_to_chars (char * buf, valueT val, int n)
+ {
+-  number_to_chars_bigendian (buf, val, n);
++  if (target_big_endian) number_to_chars_bigendian (buf, val, n);
++  else number_to_chars_littleendian (buf, val, n);
+ }
+ 
+ /* Turn a string in input_line_pointer into a floating point constant of type
+@@ -276,7 +282,7 @@ md_number_to_chars (char * buf, valueT val, int n)
+ const char *
+ md_atof (int type, char * litP, int *  sizeP)
+ {
+-  return ieee_md_atof (type, litP, sizeP, true);
++  return ieee_md_atof (type, litP, sizeP, target_big_endian);
+ }
+ 
+ bool
+diff --git a/gas/config/tc-or1k.h b/gas/config/tc-or1k.h
+index e6fdec567dd..fd1ce807ae5 100644
+--- a/gas/config/tc-or1k.h
++++ b/gas/config/tc-or1k.h
+@@ -26,7 +26,7 @@
+ extern unsigned long or1k_machine;
+ #define TARGET_MACH (or1k_machine)
+ 
+-#define TARGET_FORMAT           "elf32-or1k"
++#define TARGET_FORMAT (target_big_endian ? "elf32-or1k" : "elf32-or1k-little")
+ #define TARGET_BYTES_BIG_ENDIAN 1
+ 
+ /* Permit temporary numeric labels.  */
+diff --git a/ld/emulparams/elf32or1k.sh b/ld/emulparams/elf32or1k.sh
+index 48d2ecfa2b0..78fe888933c 100644
+--- a/ld/emulparams/elf32or1k.sh
++++ b/ld/emulparams/elf32or1k.sh
+@@ -2,6 +2,8 @@ SCRIPT_NAME=elf
+ MACHINE=
+ TEMPLATE_NAME=elf
+ OUTPUT_FORMAT="elf32-or1k"
++BIG_OUTPUT_FORMAT="elf32-or1k"
++LITTLE_OUTPUT_FORMAT="elf32-or1k-little"
+ NOP=0x15000000
+ TEXT_START_ADDR=0x0000
+ TARGET_PAGE_SIZE=0x2000

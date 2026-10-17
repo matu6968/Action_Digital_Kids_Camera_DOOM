@@ -1,0 +1,332 @@
+# Changes to doomhack/GBADoom commit 89097b3 for the JT5295 camera port (line endings normalised to LF; upstream uses CRLF).
+--- upstream/source/d_main.c
++++ repo/source/d_main.c
+@@ -386,6 +386,13 @@
+     const char *name;
+ }
+ 
++/*
++ * Changed for this console: the attract loop played demos, and those are
++ * recorded in levels from other episodes. The trimmed WAD contains only
++ * E1M1, so the engine aborted with "W_GetNumForName: E1M5 not found".
++ * The sequence now shows the title screen throughout instead.
++ * Drop this patch if you flash a full WAD.
++ */
+ const demostates[][4] =
+ {
+     {
+@@ -396,10 +403,10 @@
+     },
+ 
+     {
+-        {G_DeferedPlayDemo, "demo1"},
+-        {G_DeferedPlayDemo, "demo1"},
+-        {G_DeferedPlayDemo, "demo1"},
+-        {G_DeferedPlayDemo, "demo1"},
++        {D_SetPageName, "TITLEPIC"},
++        {D_SetPageName, "TITLEPIC"},
++        {D_SetPageName, "TITLEPIC"},
++        {D_SetPageName, "TITLEPIC"},
+     },
+     {
+         {D_SetPageName, "TITLEPIC"},
+@@ -409,10 +416,10 @@
+     },
+ 
+     {
+-        {G_DeferedPlayDemo, "demo2"},
+-        {G_DeferedPlayDemo, "demo2"},
+-        {G_DeferedPlayDemo, "demo2"},
+-        {G_DeferedPlayDemo, "demo2"},
++        {D_SetPageName, "TITLEPIC"},
++        {D_SetPageName, "TITLEPIC"},
++        {D_SetPageName, "TITLEPIC"},
++        {D_SetPageName, "TITLEPIC"},
+     },
+ 
+     {
+@@ -423,10 +430,10 @@
+     },
+ 
+     {
+-        {G_DeferedPlayDemo, "demo3"},
+-        {G_DeferedPlayDemo, "demo3"},
+-        {G_DeferedPlayDemo, "demo3"},
+-        {G_DeferedPlayDemo, "demo3"},
++        {D_SetPageName, "TITLEPIC"},
++        {D_SetPageName, "TITLEPIC"},
++        {D_SetPageName, "TITLEPIC"},
++        {D_SetPageName, "TITLEPIC"},
+     },
+ 
+     {
+@@ -607,6 +614,16 @@
+ 
+     if (_g->gamemode == indetermined)
+     {
++        /*
++         * Changed for this console: the game mode is inferred from the
++         * number of levels present (sw >= 9 for shareware). Our WAD holds
++         * only E1M1, so no threshold matches and the mode would stay
++         * "indetermined". M_NewGame then picks the four-entry episode menu
++         * and aborts with "M_EPI4 not found", because episode 4 only
++         * exists in Ultimate Doom.
++         * Drop this patch if you flash a full WAD.
++         */
++        _g->gamemode = shareware;
+         //jff 9/3/98 use logical output routine
+         lprintf(LO_WARN,"Unknown Game Version, may not work\n");
+     }
+--- upstream/source/g_game.c
++++ repo/source/g_game.c
+@@ -671,10 +671,57 @@
+ // G_DoCompleted
+ //
+ 
++/*
++ * Changed for this console: reboot when the finished level has no
++ * successor in the WAD.
++ *
++ * The flash only fits a trimmed IWAD, so after E1M1 there is no E1M2.
++ * A first attempt returned to the title screen from G_DoWorldDone, which
++ * still hung - the intermission screen runs before that and wants
++ * graphics for the "next level" that are not there either. So the reset
++ * goes here, at the very first instruction after the exit is taken, where
++ * nothing downstream can trip over the missing map.
++ *
++ * A system reset is a clean restart on this console: the boot ROM runs,
++ * the bootloader re-initialises the flash controller and jumps back to
++ * 0x08004000, and the player lands on the DOOM title screen.
++ *
++ * Harmless with a full WAD: the next map exists and this does nothing.
++ */
++static boolean G_NextMapExists(void)
++{
++    char name[9];
++    int  map = _g->gamemap + 1;
++
++    if (_g->gamemode == commercial)
++    {
++        if (map < 1 || map > 99) return false;
++        name[0] = 'M'; name[1] = 'A'; name[2] = 'P';
++        name[3] = '0' + (map / 10);
++        name[4] = '0' + (map % 10);
++        name[5] = 0;
++    }
++    else
++    {
++        if (map < 1 || map > 9) return false;
++        name[0] = 'E';
++        name[1] = '0' + _g->gameepisode;
++        name[2] = 'M';
++        name[3] = '0' + map;
++        name[4] = 0;
++    }
++    return W_CheckNumForName(name) != -1;
++}
++
++extern void I_Reboot_console(void);   /* port/i_system_console.c */
++
+ void G_DoCompleted (void)
+ {
+     _g->gameaction = ga_nothing;
+ 
++    if (!G_NextMapExists())
++        I_Reboot_console();        // does not return
++
+     if (_g->playeringame)
+         G_PlayerFinishLevel(0);        // take away cards and stuff
+ 
+--- upstream/source/lprintf.c
++++ repo/source/lprintf.c
+@@ -41,6 +41,10 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <stdarg.h>
++/* Changed for this port: strlen() below was used without a
++ * declaration. A warning up to GCC 13 and an error from GCC 14 on,
++ * so the build would break on newer toolchains - CI included. */
++#include <string.h>
+ 
+ #include "doomtype.h"
+ #include "lprintf.h"
+--- upstream/source/r_data.c
++++ repo/source/r_data.c
+@@ -428,7 +428,10 @@
+ // killough 1/21/98, 1/31/98
+ //
+ 
+-int PUREFUNC R_CheckTextureNumForName (const char *name)
++//Not PUREFUNC: R_GetTextureNumForName() updates the tex_lookup_last_* memo
++//in global state, so this observably writes memory.
++
++int R_CheckTextureNumForName (const char *name)
+ {
+     // "NoTexture" marker.
+     if (name[0] == '-')
+--- upstream/source/r_hotpath.iwram.c
++++ repo/source/r_hotpath.iwram.c
+@@ -294,10 +294,19 @@
+ // This goes here as we want the Thumb code
+ // to BX to ARM as Thumb long mul is very slow.
+ //********************************************
++#ifdef __APPOTECH_JT5295__
++/* Changed for the JT5295 port: four 32-bit l.mul instead of a 64-bit libgcc multiply, see port/fixed_hw.h. */
++#include "fixed_hw.h"
++inline fixed_t CONSTFUNC FixedMul(fixed_t a, fixed_t b)
++{
++    return (fixed_t)fixed_mul_hw((int32_t)a, (int32_t)b);
++}
++#else
+ inline fixed_t CONSTFUNC FixedMul(fixed_t a, fixed_t b)
+ {
+     return (fixed_t)((int_64_t) a*b >> FRACBITS);
+ }
++#endif
+ 
+ // killough 5/3/98: reformatted
+ 
+@@ -3297,26 +3306,27 @@
+ 
+ 
+ 
+-static int I_GetTime_e32(void)
++/* Changed: this reads a GBA timer register and is unused on this
++ * console. Renamed only so that it stops shadowing the global platform
++ * function of the same name in port/i_system_console.c - which is what
++ * made the game freeze on a black screen for a while. */
++static int I_GetTime_gbatimer(void) __attribute__((unused));
++static int I_GetTime_gbatimer(void)
+ {
+     int thistimereply = *((unsigned short*)(0x400010C));
+ 
+     return thistimereply;
+ }
+ 
++/* Time base for this port: the core cycle counter, 35 Hz. */
++extern int I_GetTime_e32(void);
++
+ 
+ int I_GetTime(void)
+ {
+     int thistimereply;
+ 
+-#ifndef GBA
+-
+-    clock_t now = clock();
+-
+-    thistimereply = (int)((double)now / ((double)CLOCKS_PER_SEC / (double)TICRATE));
+-#else
+     thistimereply = I_GetTime_e32();
+-#endif
+ 
+     if (thistimereply < _g->lasttimereply)
+     {
+--- upstream/source/v_video.c
++++ repo/source/v_video.c
+@@ -199,12 +199,16 @@
+ }
+ 
+ //Colour corrected PLAYPAL lumps ~ Kippykip
++/* Changed for the JT5295 port: the trimmed WAD (tools/wad_trim.py) keeps PLAYPAL and PLAYPAL1 only. */
++#ifndef MAX_PALETTE_LUMP
++#define MAX_PALETTE_LUMP 1
++#endif
+ void V_SetPalLump(int index)
+ {
+     if(index < 0)
+         index = 0;
+-    else if(index > 5)
+-        index = 5;
++    else if(index > MAX_PALETTE_LUMP)
++        index = MAX_PALETTE_LUMP;
+ 
+     char lumpName[9] = "PLAYPAL0";
+ 
+--- upstream/source/w_wad.c
++++ repo/source/w_wad.c
+@@ -120,7 +120,12 @@
+ //Return -1 if not found.
+ //Set lump ptr if found.
+ 
+-static int PUREFUNC FindLumpByName(const char* name, const filelump_t** lump)
++//Note: This must NOT be PUREFUNC. It writes through the *lump out parameter,
++//which a pure function is not allowed to do. With pure the compiler tail calls
++//it from W_CheckNumForName() and releases that frame first, so the write to
++//*lump lands on the already freed stack slot holding the return address.
++
++static int FindLumpByName(const char* name, const filelump_t** lump)
+ {
+     const wadinfo_t* header;
+     const filelump_t  *fileinfo;
+@@ -288,5 +293,17 @@
+ 
+ const void* PUREFUNC W_CacheLumpNum(int lump)
+ {
++#if defined(DOOM_STATS) && DOOM_STATS
++    /* Changed for the JT5295 port: tools/wad_trim.py empties lumps the map should not need. Say so (once per lump) if the
++     * engine asks for one anyway, so a trimming mistake shows up in the log instead of as a visual glitch. */
++    static unsigned char reported[4096 / 8];
++    const filelump_t* l = FindLumpByNum(lump);
++    if(l && l->size == 0 && lump >= 0 && lump < 4096 && !(reported[lump >> 3] & (1u << (lump & 7))))
++    {
++        reported[lump >> 3] |= (1u << (lump & 7));
++        extern int printf(const char*, ...);
++        printf("EMPTY LUMP requested: %.8s (#%d)\n", l->name, lump);
++    }
++#endif
+     return W_GetLumpPtr(lump);
+ }
+--- upstream/source/z_zone.c
++++ repo/source/z_zone.c
+@@ -40,7 +40,17 @@
+ 
+ #define ZONEID	0x1d4a11
+ 
++/* Changed for this console: usable SRAM is 0x20000000-0x20045FFF (280 KB,
++ * measured on the device). Roughly 62 KB go to .bss including the
++ * framebuffer and 8 KB to the stack, leaving about 209 KB.
++ * Z_Init would shrink the request itself, but in 4-byte steps - starting
++ * from a realistic value skips that very long loop. */
++#ifdef __APPOTECH_JT5295__
++/* Changed for the JT5295 port: 256 KiB static zone (port/i_system_jt5295.c defines doom_zone_storage). */
+ const unsigned int maxHeapSize = (256 * 1024);
++#else
++const unsigned int maxHeapSize = (200 * 1024);
++#endif
+ 
+ #ifndef GBA
+     static int running_count = 0;
+@@ -74,6 +84,12 @@
+ 
+     unsigned int heapSize = maxHeapSize;
+ 
++#ifdef __APPOTECH_JT5295__
++    /* Changed for the JT5295 port: the zone is a static buffer in the codec-RAM bank (port/plat.h, linker/doom.ld) so it
++     * does not compete with the SDK's 12 KiB heap. */
++    extern unsigned char doom_zone_storage[];
++    mainzone = (memzone_t *)doom_zone_storage;
++#else
+     //We can now alloc all of the rest fo the memory.
+     do
+     {
+@@ -83,6 +99,7 @@
+     } while(mainzone == NULL);
+ 
+     heapSize += 4;
++#endif
+ 
+     lprintf(LO_INFO,"Z_Init: Heapsize is %d bytes.", heapSize);
+ 
+--- upstream/include/doom_iwad.h
++++ repo/include/doom_iwad.h
+@@ -1,7 +1,8 @@
+ #ifndef DOOM_IWAD_H
+ #define DOOM_IWAD_H
+ 
+-extern const unsigned char doom_iwad[];
++/* Pointer instead of array: the WAD lives in XIP flash, not in the image. */
++extern const unsigned char *const doom_iwad;
+ extern const unsigned int doom_iwad_len;
+ 
+ #endif // DOOM_IWAD_H
