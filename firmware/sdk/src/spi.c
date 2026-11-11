@@ -54,7 +54,7 @@ int apx_spi_init(void){
  apx_spr_write(0x926c,0x0fffffff);apx_spr_write(0x9270,0x0fffffff);
  info.initialized=1;cs(0);int e=byte(0x9f,0,NULL);
  for(unsigned n=0;!e&&n<3;++n){uint8_t value;e=byte(255,1,&value);if(!e)info.jedec=info.jedec<<8|value;}
- cs(1);if(!e&&info.jedec!=0x5e4015)e=APX_SPI_HARDWARE;
+ cs(1);if(!e&&info.jedec!=APX_SPI_JEDEC)e=APX_SPI_HARDWARE;
  if(!e)e=status(&info.status);
  busy=0;if(e)apx_spi_shutdown();
  return e;
@@ -101,8 +101,8 @@ static uint32_t get32(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|
 uint32_t apx_spi_command(unsigned command,const uint8_t *input,size_t length,uint8_t *output,size_t *size){
  *size=0;if(!info.initialized)return APXD_UNSUPPORTED;
  if(!command&&!length){uint8_t value;int e=apx_spi_status(&value);if(e)return APXD_IO;
-  int n=snprintf((char *)output,APXD_MAX_PAYLOAD,"{\"jedec\":%lu,\"capacity\":2097152,\"page_bytes\":256,\"sector_bytes\":4096,\"status\":%u,\"bytes_read\":%lu,\"dma_transfers\":%lu,\"timeouts\":%lu,\"host_read_only\":false,\"write_protocol\":1}",
-   (unsigned long)info.jedec,value,(unsigned long)info.bytes_read,(unsigned long)info.dma_transfers,(unsigned long)info.timeouts);
+  int n=snprintf((char *)output,APXD_MAX_PAYLOAD,"{\"jedec\":%lu,\"capacity\":%lu,\"page_bytes\":256,\"sector_bytes\":4096,\"status\":%u,\"bytes_read\":%lu,\"dma_transfers\":%lu,\"timeouts\":%lu,\"host_read_only\":false,\"write_protocol\":1}",
+   (unsigned long)info.jedec,(unsigned long)APX_SPI_CAPACITY,value,(unsigned long)info.bytes_read,(unsigned long)info.dma_transfers,(unsigned long)info.timeouts);
   if(n<0||n>=APXD_MAX_PAYLOAD)return APXD_INVALID;
  *size=n;return 0;}
  if(command==1&&length==8){uint32_t address=get32(input),bytes=get32(input+4);

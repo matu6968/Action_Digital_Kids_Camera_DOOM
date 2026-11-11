@@ -8,7 +8,7 @@
 #include <stddef.h>
 
 /* Build-time board constants (panel, crop, WAD path, button timing). */
-#include "board.h"
+#include "doom_board.h"
 
 /* Memory for the engine's zeroed state lives in the codec-RAM bank, see linker/doom.ld. */
 #define DOOM_BUFFER __attribute__((section(".doom_buffer"), aligned(32)))

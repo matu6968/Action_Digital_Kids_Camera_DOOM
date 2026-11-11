@@ -3,7 +3,7 @@
  *
  * -mappotech forces software multiply and divide, so the compiler calls libgcc's __mulsi3 (a shift-and-add loop) and the
  * __udivsi3/__divsi3/__umodsi3/__modsi3 bit loops. The JT5295 implements l.mul, l.div and l.divu: the stock firmware uses them
- * (~1900 times) and examples/doom-probe checked them against the software results on the camera, about 4x faster for a multiply
+ * (~1900 times) and a probe run on the camera checked them against the software results (examples/muldiv-test repeats that), about 4x faster for a multiply
  * and 12x for a divide in a loop. Defining the symbols here makes the linker take these instead of libgcc's archive members, so
  * every `*`, `/` and `%` in the SDK, FatFs, picolibc and applications becomes a call to a three-instruction function.
  *

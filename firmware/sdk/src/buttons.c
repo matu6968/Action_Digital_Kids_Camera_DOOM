@@ -9,7 +9,9 @@
 #define SAMPLE_TICKS 164u
 #define DEBOUNCE_TICKS 656u
 #define QUEUE_SIZE 16u
-static const uint16_t centers[5]={0,306,484,658,817};
+static const uint16_t centers[]=APX_BUTTON_CENTERS;
+static const uint32_t flags[]=APX_BUTTON_FLAGS;
+#define OWNED_MASK (APX_BUTTON_INPUT_MASK|APX_STATUS_LED_MASK)
 static const uint16_t saved_regs[]={0x8044,0x8084,0x80c4,0x8104,0x8144,0x81c4,0x8204,0x8384};
 static uint32_t saved[8];
 static struct apx_buttons_info info;
@@ -19,9 +21,14 @@ static uint32_t next_sample,candidate,candidate_since;
 static void update(unsigned reg,uint32_t mask,uint32_t value) {
     apx_spr_write(reg,(apx_spr_read(reg)&~mask)|(value&mask));
 }
+#ifndef APX_STATUS_LED_LATCH
+#define APX_STATUS_LED_LATCH 0 /* 1: push-pull output + latch (Silvergear); 0: force registers (Action) */
+#endif
 int apx_led_set(int enabled) {
-    if(!initialized||(enabled!=0&&enabled!=1))return -1;
-    if(apx_gpio_set_override(APX_STATUS_LED_GROUP,APX_STATUS_LED_MASK,
+    if(!initialized||!APX_STATUS_LED_MASK||(enabled!=0&&enabled!=1))return -1;
+    if(APX_STATUS_LED_LATCH) {
+        if(apx_gpio_write(APX_STATUS_LED_GROUP,APX_STATUS_LED_MASK,enabled?APX_STATUS_LED_MASK:0))return -1;
+    } else if(apx_gpio_set_override(APX_STATUS_LED_GROUP,APX_STATUS_LED_MASK,
         enabled?APX_GPIO_FORCE_HIGH:APX_GPIO_FORCE_LOW))return -1;
     info.led=enabled;return 0;
 }
@@ -32,10 +39,10 @@ void apx_buttons_init(void) {
     apx_adc_acquire(APX_ADC_BUTTONS);
     memset(&info,0,sizeof(info));info.adc=0xffff;
     head=count=active=0;candidate=0;candidate_since=next_sample=apx_ticks();
-    apx_gpio_configure(APX_BUTTON_GROUP,APX_POWER_BUTTON_MASK|APX_BUTTON_AUX_INPUT_MASK,
+    apx_gpio_configure(APX_BUTTON_GROUP,APX_BUTTON_INPUT_MASK,
                        APX_GPIO_INPUT,APX_GPIO_FLOATING,0);
     apx_gpio_configure(APX_STATUS_LED_GROUP,APX_STATUS_LED_MASK,
-                       APX_GPIO_INPUT,APX_GPIO_FLOATING,0);
+                       APX_STATUS_LED_LATCH?APX_GPIO_OUTPUT:APX_GPIO_INPUT,APX_GPIO_FLOATING,0);
 
     initialized=1;apx_led_set(0);
 }
@@ -53,13 +60,13 @@ void apx_buttons_poll(void) {
     uint32_t now=apx_ticks(),pins=0;
     apx_gpio_read(APX_BUTTON_GROUP,APX_POWER_BUTTON_MASK,&pins);
     info.power=pins!=0;
-    uint32_t raw=info.raw_state&31u;
+    uint32_t raw=info.raw_state&~(APX_POWER_BUTTON_MASK?APX_BUTTON_POWER:0u);
     if(active) {
         uint16_t value;int result=apx_adc_result(APX_ADC_BUTTONS,&value);
         if(result>0) {
             info.adc=value;raw=0;
-            for(unsigned i=0;i<5;++i)
-                if((int)info.adc>=(int)centers[i]-29&&info.adc<=centers[i]+29)raw|=1u<<i;
+            for(unsigned i=0;i<sizeof(centers)/sizeof(centers[0]);++i)
+                if((int)info.adc>=(int)centers[i]-(int)APX_BUTTON_TOLERANCE&&info.adc<=centers[i]+APX_BUTTON_TOLERANCE)raw|=flags[i];
             active=0;next_sample=now+SAMPLE_TICKS;
         } else if(result<0) {
             ++info.adc_timeouts;info.adc=0xffff;raw=0;active=0;
@@ -78,11 +85,12 @@ int apx_buttons_next(struct apx_button_event *event) {
 void apx_buttons_shutdown(void) {
     if(!initialized)return;
     apx_adc_release(APX_ADC_BUTTONS);
+    if(APX_STATUS_LED_LATCH&&APX_STATUS_LED_MASK)(void)apx_gpio_write(APX_STATUS_LED_GROUP,APX_STATUS_LED_MASK,0);
     /* Divider 9174 is write-only on this board; stock also uses 71.
      * Restore only the clock bit we own and the affected GPIO pin fields. */
 
-    update(0x81c4,0x23,0);update(0x8204,0x23,0);
-    for(unsigned i=0;i<8;++i)update(saved_regs[i],0x23,saved[i]);
+    update(0x81c4,OWNED_MASK,0);update(0x8204,OWNED_MASK,0);
+    for(unsigned i=0;i<8;++i)update(saved_regs[i],OWNED_MASK,saved[i]);
     initialized=active=count=0;
 }
 static uint32_t get32(const uint8_t *p) { return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24; }
@@ -93,14 +101,16 @@ uint32_t apx_gpio_command(unsigned command,const uint8_t *input,size_t length,ui
     if(command==0&&length==0) {
         int n=snprintf((char *)output,APXD_MAX_PAYLOAD,
             "{\"state\":%lu,\"raw_state\":%lu,\"adc\":%u,\"power\":%u,\"led\":%u,"
-            "\"adc_timeouts\":%lu,\"events_dropped\":%lu,\"buttons\":[\"SHUTTER\",\"DOWN\",\"UP\",\"LEFT\",\"RIGHT\",\"POWER\"]}",
+            "\"adc_timeouts\":%lu,\"events_dropped\":%lu,\"buttons\":%s}",
             (unsigned long)info.state,(unsigned long)info.raw_state,info.adc,info.power,info.led,
-            (unsigned long)info.adc_timeouts,(unsigned long)info.events_dropped);
+            (unsigned long)info.adc_timeouts,(unsigned long)info.events_dropped,
+            APX_BOARD_SILVERGEAR?"[\"SHUTTER\",\"LEFT\",\"RIGHT\",\"EXIT\",\"MODE\",\"PRINT\",\"POWER\"]":"[\"SHUTTER\",\"DOWN\",\"UP\",\"LEFT\",\"RIGHT\",\"POWER\"]");
         if(n<0||n>=APXD_MAX_PAYLOAD)return APXD_INVALID;
         *size=n;return APXD_OK;
     }
     if(command==1&&length==4) {
         uint32_t value=get32(input);if(value>1)return APXD_RANGE;
+        if(!APX_STATUS_LED_MASK)return APXD_UNSUPPORTED;
         return apx_led_set(value)?APXD_IO:APXD_OK;
     }
     if(command==2&&length==0) {

@@ -61,11 +61,12 @@ uint32_t apx_storage_command(unsigned cmd,const uint8_t *in,size_t len,uint8_t *
         int n=snprintf((char *)out,APXD_MAX_PAYLOAD,
             "{\"initialized\":%u,\"sectors\":%llu,\"sector_bytes\":512,\"high_capacity\":%u,"
             "\"clock_hz\":%lu,\"reads\":%lu,\"writes\":%lu,\"errors\":%lu,\"last_command\":%lu,"
-            "\"last_status\":%lu,\"mounted\":%u,\"write_protected\":%s,\"retries\":%lu,\"last_failure_command\":%lu,\"last_failure_status\":%lu,\"fatfs\":\"R0.16\"}",
+            "\"last_status\":%lu,\"mounted\":%u,\"write_protected\":%s,\"retries\":%lu,\"last_failure_command\":%lu,\"last_failure_status\":%lu,\"high_speed\":%u,\"streams\":%lu,\"wstreams\":%lu,\"fatfs\":\"R0.16\"}",
             card->initialized,(unsigned long long)card->sectors,card->high_capacity,
             (unsigned long)card->clock_hz,(unsigned long)card->reads,(unsigned long)card->writes,(unsigned long)card->errors,
             (unsigned long)card->last_command,(unsigned long)card->last_status,mounted,card->write_protected?"true":"false",
-            (unsigned long)card->retries,(unsigned long)card->last_failure_command,(unsigned long)card->last_failure_status);
+            (unsigned long)card->retries,(unsigned long)card->last_failure_command,(unsigned long)card->last_failure_status,
+            card->high_speed,(unsigned long)card->streams,(unsigned long)card->wstreams);
         if(n<0||n>=APXD_MAX_PAYLOAD)return APXD_INVALID;
         *size=n;return APXD_OK;
     }

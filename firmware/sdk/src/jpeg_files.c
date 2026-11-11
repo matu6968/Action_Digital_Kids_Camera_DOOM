@@ -47,7 +47,9 @@ uint32_t apx_jpeg_preview_file_ex(const char *path,unsigned flags) {
  if(use_software&&decoded.slow_reasons&&!(flags&APX_IMAGE_ALLOW_SLOW)){
   denied_reasons=decoded.slow_reasons;return failure(APX_JPEG_SLOW);}
  unsigned sw=apx_display_width(),sh=apx_display_height();
- if(sw>224||sh>220)return failure(APX_JPEG_RANGE);
+ /* The decoded frame must fit `pixels`: pitch is rounded up to 32, NV21 is 3/2 bytes per pixel. Action 224x176 needs 59136,
+  * Silvergear 320x240 needs 115200, both inside the 128 KiB buffer. */
+ if((uint64_t)((sw+31u)&~31u)*sh*3u/2u>sizeof(pixels))return failure(APX_JPEG_RANGE);
  if((uint64_t)image.width*sh>(uint64_t)image.height*sw) {view_w=sw&~1u;view_h=(view_w*image.height/image.width)&~1u;}
  else {view_h=sh&~1u;view_w=(view_h*image.width/image.height)&~1u;}
  if(!view_w||!view_h)return failure(APX_JPEG_RANGE);
@@ -57,6 +59,8 @@ uint32_t apx_jpeg_preview_file_ex(const char *path,unsigned flags) {
  view_pitch=(view_w+31)&~31u;
  if(use_software){unsigned offset=(input_bytes+31)&~31u;
   error=apx_image_decode_start_ex(stream,input_bytes,pixels,sizeof(pixels),view_w,view_h,stream+offset,STREAM_CAPACITY-offset,flags);}
+ else if(view_w>224||view_h>220) /* panels larger than the Action camera's: the 640x480 output variant */
+  error=apx_jpeg_decode_start_large(stream,input_bytes,pixels,sizeof(pixels),view_w,view_h);
  else error=apx_jpeg_decode_start(stream,input_bytes,pixels,sizeof(pixels),view_w,view_h);
  if(error)return failure(error);
  software=use_software;job=1;phase=job_error=0;++job_sequence;return 0;

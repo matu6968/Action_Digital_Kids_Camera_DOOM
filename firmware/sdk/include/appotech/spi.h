@@ -2,14 +2,24 @@
 #define APPOTECH_SPI_H
 #include <stddef.h>
 #include <stdint.h>
-#define APX_SPI_CAPACITY 0x200000u
+#if __has_include("board.h")
+#include "board.h"
+#endif
+/* Flash size and JEDEC ID come from the board header (Action 5e4015 / 2 MiB, Silvergear 944016 / 4 MiB). */
+#ifndef APX_SPI_FLASH_BYTES
+#define APX_SPI_FLASH_BYTES 0x200000u
+#endif
+#ifndef APX_SPI_JEDEC
+#define APX_SPI_JEDEC 0x5e4015u
+#endif
+#define APX_SPI_CAPACITY APX_SPI_FLASH_BYTES
 #define APX_SPI_PAGE 256u
 #define APX_SPI_SECTOR 4096u
 enum apx_spi_error {APX_SPI_OK,APX_SPI_INVALID,APX_SPI_TIMEOUT,APX_SPI_HARDWARE,APX_SPI_BUSY};
 struct apx_spi_info {uint32_t jedec,bytes_read,dma_transfers,timeouts;uint8_t initialized,status;};
 /* Independent stock controller sequence; static guarded 4KiB bounce buffer.
  * Synchronous, bounded, cooperative, non-reentrant. No mapped-XIP access.
- * Geometry verified for this board's 5e4015 (2MiB) device only. */
+ * Geometry follows the board header: only that board's APX_SPI_JEDEC device is accepted. */
 int apx_spi_init(void);
 int apx_spi_read(uint32_t address,void *buffer,size_t length);
 int apx_spi_status(uint8_t *status);

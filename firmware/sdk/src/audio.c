@@ -6,6 +6,10 @@
 static struct apx_audio_info info;
 static unsigned initialized,servicing;
 static uintptr_t owned_pcm;
+static unsigned stream_active;           /* gapless streaming (see apx_audio_stream_*) */
+static uint32_t stream_pending;          /* halfwords of the queued block that has not started yet, 0 = none */
+static unsigned stream_rate;
+static uint32_t stream_underruns;
 __attribute__((weak,noinline)) int apx_mic_buffer_busy(const void *p,size_t bytes) {(void)p;(void)bytes;return 0;}
 __attribute__((weak,noinline)) void apx_mic_shutdown(void) {}
 int apx_audio_buffer_busy(const void *p,size_t bytes) {
@@ -14,10 +18,6 @@ int apx_audio_buffer_busy(const void *p,size_t bytes) {
  return address<=owned_pcm?bytes>owned_pcm-address:address-owned_pcm<info.bytes;
 }
 static uint32_t start,deadline,drain_until;
-static unsigned stream_active;           /* gapless streaming (see apx_audio_stream_*) */
-static uint32_t stream_pending;          /* halfwords of the queued block that has not started yet, 0 = none */
-static unsigned stream_rate;
-static uint32_t stream_underruns;
 static uint32_t saved_gate,saved_clock_select,saved_clock_divider,saved_analog,saved_analog_control,saved_amplifier;
 static const uint16_t coefficients[27]={0x0034,0x7f98,0xc067,0x0068,0x7f2d,0xc0cf,0x00ce,0x7e54,0xc19c,
  0x0196,0x7c94,0xc32d,0x031a,0x78d7,0xc634,0x0603,0x704f,0xcc06,0x0a00,0x5eda,0xd3ff,

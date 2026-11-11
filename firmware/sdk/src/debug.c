@@ -11,8 +11,10 @@
 #ifndef APX_BUILD_ID
 #define APX_BUILD_ID "development"
 #endif
-static uint8_t request[APXD_HEADER_SIZE+APXD_MAX_PAYLOAD],response[APXD_HEADER_SIZE+APXD_MAX_PAYLOAD];
-static uint8_t packet[512];
+/* About 9 KB of buffers only the CPU touches, zero-initialised: in the extra bank (.extra_bss, cleared in apx_runtime_init) to keep the runtime window free. */
+#define EXTRA_BSS __attribute__((section(".extra_bss")))
+static uint8_t request[APXD_HEADER_SIZE+APXD_MAX_PAYLOAD] EXTRA_BSS,response[APXD_HEADER_SIZE+APXD_MAX_PAYLOAD] EXTRA_BSS;
+static uint8_t packet[512] EXTRA_BSS;
 static size_t received,expected;
 static uint32_t request_start;
 static unsigned pending_action;
@@ -24,6 +26,7 @@ __attribute__((weak,noinline)) uint32_t apx_gpio_command(unsigned command,const 
 extern unsigned char __display_dma_start[],__display_dma_end[];
 extern unsigned char __jpeg_buffer_start[],__jpeg_buffer_end[];
 extern unsigned char __extra_ram_start[],__extra_ram_end[];
+extern unsigned char __large_buffer_start[],__large_buffer_end[];
 __attribute__((weak,noinline)) uint32_t apx_storage_command(unsigned command,const uint8_t *input,size_t length,uint8_t *output,size_t *output_length) {
     (void)command;(void)input;(void)length;(void)output;*output_length=0;return APXD_UNSUPPORTED;
 }
@@ -48,6 +51,9 @@ __attribute__((weak,noinline)) uint32_t apx_battery_command(unsigned command,con
 __attribute__((weak,noinline)) uint32_t apx_uart_command(unsigned command,const uint8_t *input,size_t length,uint8_t *output,size_t *output_length) {
     (void)command;(void)input;(void)length;(void)output;*output_length=0;return APXD_UNSUPPORTED;
 }
+__attribute__((weak,noinline)) uint32_t apx_printer_command(unsigned command,const uint8_t *input,size_t length,uint8_t *output,size_t *output_length) {
+    (void)command;(void)input;(void)length;(void)output;*output_length=0;return APXD_UNSUPPORTED;
+}
 static uint32_t get32(const uint8_t *p) { return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24; }
 static void put32(uint8_t *p,uint32_t v) { p[0]=v;p[1]=v>>8;p[2]=v>>16;p[3]=v>>24; }
 void apx_debug_reset(void) { received=expected=pending_action=0; }
@@ -58,6 +64,8 @@ static int protected_range(uint32_t address,uint32_t length) {
             (address>=0x02210000u || length>0x02210000u-address)) ||
            ((uintptr_t)__extra_ram_end>(uintptr_t)__extra_ram_start && address<0x022e0000u &&
             (address>=0x02220000u || length>0x02220000u-address)) ||
+           ((uintptr_t)__large_buffer_end>(uintptr_t)__large_buffer_start && address<0x02100000u &&
+            (address>=0x02080000u || length>0x02080000u-address)) ||
            ((uintptr_t)__jpeg_buffer_end>(uintptr_t)__jpeg_buffer_start && address<0x02400000u &&
             (address>=0x022e0000u || length>0x022e0000u-address));
 }
@@ -83,15 +91,16 @@ static void dispatch(void) {
                 (unsigned long)crash.stack[0],(unsigned long)crash.stack[1],(unsigned long)crash.stack[2],(unsigned long)crash.stack[3],
                 (unsigned long)crash.stack[4],(unsigned long)crash.stack[5],(unsigned long)crash.stack[6],(unsigned long)crash.stack[7]);
         int count=snprintf((char *)response+24,APXD_MAX_PAYLOAD,
-            "{\"protocol\":1,\"board\":\"%s\",\"build_id\":\"%s\",\"max_payload\":4096,"
-            "\"ram\":[33554432,37748736],\"owned_ram\":[[35127296,35258368],[35651584,35667968]%s%s%s],"
+            "{\"protocol\":1,\"board\":\"%s\",\"build_id\":\"%s\",\"max_payload\":4096,\"camera_count\":%u,\"printer\":%s,"
+            "\"ram\":[33554432,37748736],\"owned_ram\":[[35127296,35258368],[35651584,35667968]%s%s%s%s],"
             "\"boot_source\":\"%s\",\"cpu_hz_estimate\":%lu,\"usb_speed\":\"%s\",\"log_dropped\":%lu,"
             "\"suspend_count\":%u,\"resume_count\":%u,"
             "\"clock\":{\"requested_mhz\":%lu,\"pll1_control\":%lu,\"pll1_coefficient\":%lu,"
             "\"baseline_loop_ticks\":%lu,\"active_loop_ticks\":%lu,\"error\":%lu}%s}",
-            APX_BOARD_NAME,APX_BUILD_ID,
+            APX_BOARD_NAME,APX_BUILD_ID,APX_CAMERA_COUNT,APX_HAS_PRINTER?"true":"false",
             (uintptr_t)__display_dma_end>(uintptr_t)__display_dma_start?",[35717120,35782656]":"",
             (uintptr_t)__extra_ram_end>(uintptr_t)__extra_ram_start?",[35782656,36569088]":"",
+            (uintptr_t)__large_buffer_end>(uintptr_t)__large_buffer_start?",[34078720,34603008]":"", /* 0x02080000..0x02100000: the application buffers */
             (uintptr_t)__jpeg_buffer_end>(uintptr_t)__jpeg_buffer_start?",[36569088,37748736]":"",
             apx_boot_from_spi()?"spi":"usb",(unsigned long)clock.cpu_hz_estimate,apx_usb_high_speed()?"high":"full",(unsigned long)apx_log_dropped(),
             apx_usb_suspend_count(),apx_usb_resume_count(),(unsigned long)clock.requested_mhz,
@@ -100,7 +109,7 @@ static void dispatch(void) {
         if(count<0 || count>=APXD_MAX_PAYLOAD)status=APXD_INVALID;else output=count;
     } else if(operation==APXD_LOG) output=apx_log_read(response+24,length);
     else if(operation==APXD_BOOTROM && length==0)pending_action=(status=apx_storage_prepare_bootrom())==APXD_OK?3:0;
-    else if(operation==APXD_STORAGE||operation==APXD_GPIO||operation==APXD_SYSTEM||operation==APXD_JPEG||operation==APXD_AUDIO||operation==APXD_MICROPHONE||operation==APXD_CAMERA||operation==APXD_SPI||operation==APXD_BATTERY||operation==APXD_UART) {
+    else if(operation==APXD_STORAGE||operation==APXD_GPIO||operation==APXD_SYSTEM||operation==APXD_JPEG||operation==APXD_AUDIO||operation==APXD_MICROPHONE||operation==APXD_CAMERA||operation==APXD_SPI||operation==APXD_BATTERY||operation==APXD_UART||operation==APXD_PRINTER) {
         if(space!=APXD_MEMORY||width!=1)status=APXD_INVALID;
         else {
             size_t size=0;
@@ -117,6 +126,7 @@ static void dispatch(void) {
                 operation==APXD_AUDIO?apx_audio_command(address,request+24,length,response+24,&size):
                 operation==APXD_MICROPHONE?apx_microphone_command(address,request+24,length,response+24,&size):
                 operation==APXD_CAMERA?apx_camera_command(address,request+24,length,response+24,&size):
+                operation==APXD_PRINTER?apx_printer_command(address,request+24,length,response+24,&size):
                 operation==APXD_SPI?apx_spi_command(address,request+24,length,response+24,&size):
                 operation==APXD_BATTERY?apx_battery_command(address,request+24,length,response+24,&size):
                 apx_uart_command(address,request+24,length,response+24,&size);
@@ -168,7 +178,7 @@ void apx_debug_poll(void) {
     if(received>=24 && !expected) {
         uint32_t length=get32(request+16);
         if(length>APXD_MAX_PAYLOAD || memcmp(request,"APXD",4)) { received=expected=0;return; }
-        expected=24+((request[5]==APXD_WRITE||request[5]==APXD_STORAGE||request[5]==APXD_GPIO||request[5]==APXD_SYSTEM||request[5]==APXD_JPEG||request[5]==APXD_AUDIO||request[5]==APXD_MICROPHONE||request[5]==APXD_CAMERA||request[5]==APXD_SPI||request[5]==APXD_BATTERY||request[5]==APXD_UART)?length:0);
+        expected=24+((request[5]==APXD_WRITE||request[5]==APXD_STORAGE||request[5]==APXD_GPIO||request[5]==APXD_SYSTEM||request[5]==APXD_JPEG||request[5]==APXD_AUDIO||request[5]==APXD_MICROPHONE||request[5]==APXD_CAMERA||request[5]==APXD_SPI||request[5]==APXD_BATTERY||request[5]==APXD_UART||request[5]==APXD_PRINTER)?length:0);
     }
     if(expected && received>=expected) {
         if(received==expected)dispatch();

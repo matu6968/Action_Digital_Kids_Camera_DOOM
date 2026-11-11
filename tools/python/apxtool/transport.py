@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import glob
-import os
-from pathlib import Path
 import sys
 import time
 from typing import Callable, Protocol
@@ -49,43 +47,17 @@ class SCSITransport(Protocol):
 
 
 def _load_scsiio() -> tuple[type, type[Exception]]:
-    """Import the existing sibling scsiio package without vendoring it."""
+    """The SG_IO backend vendored from jl-uboot-tool (see scsiio/LICENSE)."""
     try:
-        from scsiio import SCSIDev  # type: ignore[import-not-found]
-        from scsiio.common import SCSIException  # type: ignore[import-not-found]
-
-        return SCSIDev, SCSIException
-    except ImportError:
-        pass
-
-    override = os.environ.get("APXTOOL_JL_UBOOT_TOOL")
-    if override:
-        candidates = [Path(override).expanduser()]
-    else:
-        # Editable installs live in <workspace>/apxtool/src/apxtool; the
-        # dependency checkout is the sibling <workspace>/jl-uboot-tool.
-        workspace = Path(__file__).resolve().parents[3]
-        candidates = [workspace / "jl-uboot-tool"]
-
-    for candidate in candidates:
-        if candidate.is_dir() and str(candidate) not in sys.path:
-            sys.path.insert(0, str(candidate))
-            try:
-                from scsiio import SCSIDev  # type: ignore[import-not-found]
-                from scsiio.common import SCSIException  # type: ignore[import-not-found]
-
-                return SCSIDev, SCSIException
-            except ImportError:
-                sys.path.remove(str(candidate))
-
-    raise ApxError(
-        "could not import scsiio; keep jl-uboot-tool beside apxtool or set "
-        "APXTOOL_JL_UBOOT_TOOL to its checkout path"
-    )
+        from .scsiio import SCSIDev
+        from .scsiio.common import SCSIException
+    except ImportError as exc:
+        raise ApxError(f"could not import the vendored scsiio backend: {exc}") from exc
+    return SCSIDev, SCSIException
 
 
 class LinuxSCSITransport:
-    """Thin adapter over jl-uboot-tool/scsiio's Linux SG_IO backend."""
+    """Thin adapter over the vendored scsiio Linux SG_IO backend."""
 
     def __init__(self, path: str):
         if not sys.platform.startswith("linux"):

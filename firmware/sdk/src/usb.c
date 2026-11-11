@@ -232,3 +232,12 @@ int apx_usb_high_speed(void) { return high_speed; }
 int apx_usb_suspended(void) { return suspended; }
 unsigned apx_usb_suspend_count(void) { return suspend_count; }
 unsigned apx_usb_resume_count(void) { return resume_count; }
+/* The legacy stack has only the debug device. */
+int apx_usb_set_mode(enum apx_usb_mode mode) { return mode==APX_USB_MODE_DEBUG ? 0 : -1; } /* the legacy stack has only the debug mode */
+enum apx_usb_mode apx_usb_mode(void) { return APX_USB_MODE_DEBUG; }
+#include <appotech/usb_msc.h>
+void apx_usb_msc_set_disk(const struct apx_usb_msc_disk *disk) { (void)disk; }
+void apx_usb_msc_ramdisk_format(void) {}
+int apx_usb_msc_use_sd(void) { return -1; }
+uint32_t apx_usb_msc_blocks_read(void) { return 0; }
+uint32_t apx_usb_msc_blocks_written(void) { return 0; }

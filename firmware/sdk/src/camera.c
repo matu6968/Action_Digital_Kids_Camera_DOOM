@@ -4,11 +4,24 @@
 #include <appotech/soc.h>
 #include <appotech/audio.h>
 #include <appotech/microphone.h>
+#include "board.h"
+#include <appotech/printer.h>
 static struct apx_camera_info info;
 static unsigned initialized,claimed,scaled_running;
+static enum apx_camera_id selected;
+struct sensor_profile { unsigned id,write_address,read_address,id_register,clock,width,height,control; const uint8_t (*pairs)[2]; unsigned count; };
+#if APX_BOARD_SILVERGEAR
+#include "sensors.inc"
+static uint32_t saved_enable[9];
+static unsigned bus_write_address=0x42,bus_read_address=0x43;
+#else
+#define bus_write_address 0x42u
+#define bus_read_address 0x43u
+#endif
 static uint32_t start,deadline;
 static const unsigned pin_regs[]={0x800c,0x804c,0x808c,0x80cc,0x810c,0x814c,0x81cc,0x820c,0x838c};
 static uint32_t saved_pins[9],saved_mux,saved_clock,saved_divider,saved_gate,saved_aux,saved_select;
+#if !APX_BOARD_SILVERGEAR
 static const uint8_t sensor_setup[]={
  0xfd,0x00,0x1d,0x25,0x31,0x07,0x32,0x01,0x30,0x01,0xf0,0xff,0xf1,0xff,0xf2,0xff,
  0xf3,0xff,0xfc,0x50,0xfd,0x01,0x5d,0x01,0x34,0xeb,0x35,0x10,0xfd,0x00,0x03,0x03,
@@ -55,12 +68,17 @@ static const uint8_t sensor_setup[]={
  0xda,0x40,0xdb,0x40,0xdc,0x3a,0xdd,0x30,0xde,0x00,0xe7,0x3a,0x9c,0x77,0x9d,0x55,
  0x9e,0x11,0x9f,0x11,0xfd,0x00,0x1c,0x00,0xfd,0x00,
 };
+#endif
 /* Stock panel resource, SPI 0x96104; camera scaler 0202b4b8. */
 static const uint32_t scaler_filter[24]={
+#if APX_BOARD_SILVERGEAR
+#include "scaler.inc"
+#else
  0x2113fefe,0x01fefe13,0x2010fdff,0x01fdff17,0x220cfcff,0x01fc001a,
  0x1f09fc00,0x00fc031d,0x2006fc00,0x00fc061c,0x1d03fc00,0x00fc091f,
  0x1a00fc01,0xfffc0c22,0x17fffd01,0xfffd1020,0xfe112011,0xff141f0e,
  0x00171f0a,0x02191e07,0x051b1b05,0x071e1902,0x0a1f1700,0x0e1f14ff
+#endif
 };
 static void update(unsigned reg,uint32_t mask,uint32_t value) {
  apx_spr_write(reg,(apx_spr_read(reg)&~mask)|(value&mask));
@@ -78,7 +96,7 @@ static int bus_wait(void) {
  uint32_t end=apx_ticks()+328;
  while(!(apx_spr_read(0x90a4)&1)) {
   if(apx_deadline_expired(end)){++info.i2c_errors;return APX_CAMERA_TIMEOUT;}
-  apx_maintenance();
+  apx_maintenance();apx_delay_service();
  }
  apx_spr_write(0x90a0,apx_spr_read(0x90a0)|1);return 0;
 }
@@ -89,40 +107,193 @@ static int bus_send(unsigned byte) {
  if(apx_spr_read(0x90a4)&0x80){++info.i2c_errors;return APX_CAMERA_NACK;}return 0;
 }
 static int sensor_write(unsigned reg,unsigned value) {
- apx_spr_write(0x90a0,0x80);int error=bus_send(0x42);
+ apx_spr_write(0x90a0,0x80);int error=bus_send(bus_write_address);
  if(!error)error=bus_send(reg);
  if(!error)error=bus_send(value);
  int stop=bus_stop();return error?error:stop;
 }
 static int sensor_read(unsigned reg,unsigned *value) {
- apx_spr_write(0x90a0,0x80);int error=bus_send(0x42);
+ apx_spr_write(0x90a0,0x80);int error=bus_send(bus_write_address);
  if(!error)error=bus_send(reg);
  int stop=bus_stop();if(error||stop)return error?error:stop;
- apx_spr_write(0x90a0,0x80);error=bus_send(0x43);
+ apx_spr_write(0x90a0,0x80);error=bus_send(bus_read_address);
  if(!error){apx_spr_write(0x90a0,apx_spr_read(0x90a0)|0x28);error=bus_wait();
   if(!error)*value=apx_spr_read(0x9098)&255;}
  stop=bus_stop();return error?error:stop;
 }
+/* Register access for the ID 0x39 sensor, which has three register pages selected through register 0xfd; page 0 is left selected afterwards (the setup and the mirror
+ * write assume it). Works while a scaled capture runs: the sensor bus is separate from the frame DMA. */
+static int sensor_page_access(unsigned page,unsigned reg,unsigned *value,int write) {
+ if(!initialized||info.sensor_id!=0x39)return APX_CAMERA_UNSUPPORTED;
+ if(page>2||reg>255)return APX_CAMERA_RANGE;
+ int error=sensor_write(0xfd,page);
+ if(!error)error=write?sensor_write(reg,*value):sensor_read(reg,value);
+ if(page){int restore=sensor_write(0xfd,0);if(!error)error=restore;}
+ return error;
+}
+int apx_camera_sensor_read(unsigned page,unsigned reg,unsigned *value) {return value?sensor_page_access(page,reg,value,0):APX_CAMERA_INVALID;}
+int apx_camera_sensor_write(unsigned page,unsigned reg,unsigned value) {return sensor_page_access(page,reg,&value,1);}
+/* Controls: stored per camera, written by apx_camera_service(). The register map (all page 1 unless noted): 0x02 longest exposure with AE in units of 151 lines (1..8, the frame
+ * stretches with the exposure beyond 500 lines), 0x04 gain, 0x12 luma contrast, 0x18 luma offset (higher darker), 0x32 switches (bit 0 AE, bit 4 AWB); page 0 0x03/0x04 exposure
+ * lines (written only with AE off; with AE on it is overwritten every frame). */
+static struct apx_camera_controls wanted[APX_CAMERA_COUNT],applied[APX_CAMERA_COUNT];
+static uint32_t exposure_retry[APX_CAMERA_COUNT]; /* tick at which the manual exposure is written once more after auto exposure was switched off (0 = none) */
+static unsigned dirty[APX_CAMERA_COUNT],chosen[APX_CAMERA_COUNT],controls_applying; /* chosen: the application has set controls for this camera */
+void apx_camera_controls_default(struct apx_camera_controls *c) {
+ c->auto_exposure=1;c->auto_white_balance=1;c->dynamic_frame_rate=1;c->gain=240;c->contrast=136;c->brightness=64;c->blank_lines=0;c->exposure_lines=500;c->frame_interval_us=0;
+}
+void apx_camera_controls_get(enum apx_camera_id id,struct apx_camera_controls *c) {
+ if(!c)return;
+ if((unsigned)id>=APX_CAMERA_COUNT||!chosen[id]){apx_camera_controls_default(c);return;}
+ *c=wanted[id];
+}
+int apx_camera_controls_set(enum apx_camera_id id,const struct apx_camera_controls *c) {
+ if(!c||(unsigned)id>=APX_CAMERA_COUNT)return APX_CAMERA_INVALID;
+ struct apx_camera_controls v=*c;
+ if(v.gain<32)v.gain=32;
+ if(v.contrast>160)v.contrast=160;
+ if(v.exposure_lines<1)v.exposure_lines=1;
+ if(v.exposure_lines>2047)v.exposure_lines=2047;
+ v.auto_exposure=v.auto_exposure!=0;v.auto_white_balance=v.auto_white_balance!=0;v.dynamic_frame_rate=v.dynamic_frame_rate!=0;
+ wanted[id]=v;chosen[id]=dirty[id]=1;return 0;
+}
+static unsigned exposure_cap_units(const struct apx_camera_controls *c) {
+ if(c->dynamic_frame_rate||!c->frame_interval_us)return 8;
+ unsigned lines=(unsigned)((uint64_t)c->frame_interval_us*1000u/APX_CAMERA_LINE_NS),n=lines/151u;
+ return n<1?1:n>8?8:n;
+}
+static int write_if_changed(unsigned reg,unsigned have,unsigned want) {return have==want?0:sensor_write(reg,want);}
+/* `have` = what the sensor holds (applied), `want` = what is wanted; the page registers are switched once per page. */
+static int apply_controls(unsigned cam,int fresh) {
+ if(!initialized||info.sensor_id!=0x39||cam!=selected||controls_applying)return 0;
+ struct apx_camera_controls want,have;
+ apx_camera_controls_get((enum apx_camera_id)cam,&want);
+ if(fresh)apx_camera_controls_default(&have);else have=applied[cam];
+ controls_applying=1;dirty[cam]=0;
+ const unsigned cap_want=exposure_cap_units(&want),cap_have=exposure_cap_units(&have);
+ int error=0;
+ if(cap_want!=cap_have||want.gain!=have.gain||want.contrast!=have.contrast||want.brightness!=have.brightness||
+    want.auto_exposure!=have.auto_exposure||want.auto_white_balance!=have.auto_white_balance) {
+  error=sensor_write(0xfd,1);
+  if(!error)error=write_if_changed(0x02,cap_have,cap_want);
+  if(!error)error=write_if_changed(0x04,have.gain,want.gain);
+  if(!error)error=write_if_changed(0x12,have.contrast,want.contrast);
+  if(!error)error=write_if_changed(0x18,have.brightness,want.brightness);
+  if(!error&&(want.auto_exposure!=have.auto_exposure||want.auto_white_balance!=have.auto_white_balance)) {
+   unsigned sw=0;error=sensor_read(0x32,&sw);
+   if(!error){sw=(sw&~0x11u)|(want.auto_exposure?1u:0u)|(want.auto_white_balance?0x10u:0u);error=sensor_write(0x32,sw);}
+  }
+  int restore=sensor_write(0xfd,0);if(!error)error=restore;
+ }
+
+ if(!error&&want.blank_lines!=have.blank_lines) {error=sensor_write(0x05,0);if(!error)error=sensor_write(0x06,want.blank_lines);} /* page 0 is selected again here */
+ if(!error&&!want.auto_exposure&&(have.auto_exposure||want.exposure_lines!=have.exposure_lines)) {
+  error=sensor_write(0x03,want.exposure_lines>>8);
+  if(!error)error=sensor_write(0x04,want.exposure_lines&255);
+  /* The sensor's last auto-exposure update lands after the switch and overwrites this write (the exposure stays at the long auto value): write it again later. */
+  if(!error&&have.auto_exposure)exposure_retry[cam]=(apx_ticks()+3300)|1u; /* ~100 ms */
+ }
+ if(!error)applied[cam]=want;else dirty[cam]=1; /* try again at the next service */
+ controls_applying=0;return error;
+}
+int apx_camera_service(void) {
+ if(!initialized||selected>=APX_CAMERA_COUNT)return 0;
+ if(exposure_retry[selected]&&(int32_t)(apx_ticks()-exposure_retry[selected])>=0&&!controls_applying) {
+  exposure_retry[selected]=0;
+  struct apx_camera_controls want;apx_camera_controls_get((enum apx_camera_id)selected,&want);
+  if(!want.auto_exposure&&info.sensor_id==0x39) {
+   controls_applying=1;
+   int error=sensor_write(0x03,want.exposure_lines>>8);
+   if(!error)error=sensor_write(0x04,want.exposure_lines&255);
+   controls_applying=0;
+   if(error)return error;
+  }
+ }
+ if(!dirty[selected])return 0;
+ return apply_controls(selected,0);
+}
 int apx_camera_init(void) {
+ if(APX_HAS_PRINTER&&apx_printer_busy())return APX_CAMERA_BUSY;
  if(initialized)return info.state==APX_CAMERA_ERROR?info.error:0;
  if(!claimed){for(unsigned n=0;n<9;++n)saved_pins[n]=apx_spr_read(pin_regs[n]);
+  #if APX_BOARD_SILVERGEAR
+  for(unsigned n=0;n<9;++n)saved_enable[n]=apx_spr_read(pin_regs[n]+4);
+#endif
   saved_mux=apx_spr_read(0x8348);saved_clock=apx_spr_read(0x8850);
   saved_divider=apx_spr_read(0x884c);saved_select=apx_spr_read(0x8848);
   saved_gate=apx_spr_read(0x8840);saved_aux=apx_spr_read(0x8868);claimed=1;}
- update(0x4800,1u<<14,0);halt();
+ update(0x4800,1u<<14,0);
+ /* Clock the engine before reading/stopping its inherited registers. */
+ update(0x8840,1u<<27,0);halt();
+#if APX_BOARD_SILVERGEAR
+ /* 02050c60: active-high power-down on PE10/PE11; alternate is held off. */
+ apx_gpio_configure(4,0xc00,APX_GPIO_OUTPUT,APX_GPIO_FLOATING,0xc00);
+ apx_delay_ms(50);
+ unsigned enable=selected==APX_CAMERA_REAR?APX_CAMERA_REAR_ENABLE_MASK:APX_CAMERA_FRONT_ENABLE_MASK;
+ apx_gpio_write(4,enable,0);apx_delay_ms(50);
+#else
  /* 02003144: sensor power-down low and a low/high/low reset pulse. */
  apx_gpio_configure(3,3,APX_GPIO_OUTPUT,APX_GPIO_FLOATING,0);
  apx_delay_ms(50);apx_gpio_write(3,1,1);apx_delay_ms(50);apx_gpio_write(3,1,0);
+#endif
  /* 0202af0c: 288 MHz / 12 sensor MCLK; preserve every unrelated divider. */
  update(0x8850,1u<<26,0);update(0x8850,1u<<26,1u<<26);
  update(0x8348,0xc00,0x800);update(0x810c,0x400,0x400);update(0x804c,0x400,0);
- update(0x8848,0x20,0);update(0x884c,0x1f00,0xb00);
+ update(0x8848,0x20,0);
+#if APX_BOARD_SILVERGEAR
+ /* Stock 02050d38: 16 MHz during identification, then the matched profile. */
+ update(0x884c,0x1f00,0x1100);
+#else
+ update(0x884c,0x1f00,0xb00);
+#endif
  /* 02026f7c: dedicated I2C on PD13/PD15, stock 400 kHz divider. */
  update(0x8348,7,3);update(0x838c,0xa000,0xa000);update(0x810c,0xa000,0xa000);
  update(0x800c,0xa000,0xa000);update(0x804c,0xa000,0x8000);update(0x808c,0xa000,0xa000);
- apx_spr_write(0x9090,71);update(0x9094,0x80,0x80);
+#if APX_BOARD_SILVERGEAR
+ /* 02034fa0 -> 0202bde4: 144 MHz/(5*200 kHz)-1. */
+ apx_spr_write(0x9090,APX_CPU_HZ_ESTIMATE/(5u*200000u)-1u);
+#else
+ apx_spr_write(0x9090,71);
+#endif
+ update(0x9094,0x80,0x80);
  update(0x8868,0x1fff,0x182e);apx_delay_ms(20);
  apx_trace(APX_TRACE_APP_BASE+0x10,0); /* sensor powered and clocked */
+#if APX_BOARD_SILVERGEAR
+ const struct sensor_profile *profile=NULL;
+ unsigned id=0;int error=APX_CAMERA_UNSUPPORTED;
+ for(unsigned n=0;n<sizeof(silvergear_sensors)/sizeof(silvergear_sensors[0]);++n) {
+  const struct sensor_profile *candidate=&silvergear_sensors[n];
+  bus_write_address=candidate->write_address;bus_read_address=candidate->read_address;
+  if(candidate->id==0xc0){(void)sensor_write(0xfc,0x16);apx_delay_ms(10);}
+  if(candidate->id==0x39)(void)sensor_write(0xfd,0);
+  error=sensor_read(candidate->id_register,&id);
+  if(!error&&id==candidate->id){profile=candidate;break;}
+ }
+ info.sensor_id=id;if(!profile)return failure(error?error:APX_CAMERA_UNSUPPORTED);
+ update(0x884c,0x1f00,((288000000u/profile->clock)-1u)<<8);
+ for(unsigned n=0;n<profile->count;++n) {
+  error=sensor_write(profile->pairs[n][0],profile->pairs[n][1]);
+  if(error)return failure(error);
+  if(!n)apx_delay_ms(10);
+ }
+ /* Stock 02050ab4 applies board-dependent mirror/flip after the setup table. */
+ /* Owner-confirmed physical mapping: stock index 0/PE10 is the selfie
+  * camera. Its stock mirror flag is 1; stock index 1/PE11 is rear, flag 0. */
+ unsigned stock_flip=selected==APX_CAMERA_FRONT;
+ switch(profile->id) {
+ case 0xa0:error=sensor_write(0x14,stock_flip?0x13:0x11);break;
+ case 0xa6:error=sensor_write(0x4a,stock_flip?12:4);break;
+ case 0xc0:break;
+ case 0x39:error=sensor_write(0xfd,0);if(!error)error=sensor_write(0x31,stock_flip?2:0);break;
+ case 0x46:
+  error=sensor_write(0xf0,0x32);
+  if(!error)error=sensor_write(0x21,stock_flip?0x66:0x60);
+  if(!error)error=sensor_write(0xe0,stock_flip?8:4);
+  if(!error)error=sensor_write(0xf0,stock_flip?0x35:0x18);
+  break;
+ }
+ if(error)return failure(error);
+#else
  unsigned id=0;int error=sensor_write(0xfd,0);if(!error)error=sensor_read(1,&id);
  apx_trace(APX_TRACE_APP_BASE+0x11,(uint32_t)error); /* sensor probe result */
  info.sensor_id=id;if(error)return failure(error);
@@ -131,12 +302,27 @@ int apx_camera_init(void) {
   error=sensor_write(sensor_setup[n],sensor_setup[n+1]);if(error)return failure(error);
   if(!n)apx_delay_ms(10);
  }
+#endif
  /* 0202ae88/02035ed8: DVP inputs and byte traversal selected by the sensor resource. */
  update(0x81cc,0xffff,0);update(0x820c,0xffff,0);
  update(0x804c,0x5ffc,0x5bfc);update(0x810c,0x5ffc,0x5ffc);update(0x8840,1u<<27,0);
- apx_spr_write(0xb000,0x286);apx_spr_write(0xb004,0);
+#if APX_BOARD_SILVERGEAR
+ apx_spr_write(0xb000,profile->control);
+#else
+ apx_spr_write(0xb000,0x286);
+#endif
+apx_spr_write(0xb004,0);
  apx_spr_write(0xb01c,0x01df027f);apx_spr_write(0xb024,0x02d00500);apx_spr_write(0xb020,0x00640190);
- info.width=info.pitch=640;info.height=480;info.error=0;info.state=APX_CAMERA_READY;initialized=1;return 0;
+#if APX_BOARD_SILVERGEAR
+ info.native_width=profile->width;info.native_height=profile->height;
+#else
+ info.native_width=640;info.native_height=480;
+#endif
+ info.width=info.pitch=info.native_width;info.height=info.native_height;
+ info.error=0;info.state=APX_CAMERA_READY;initialized=1;
+ /* The setup table has just given the sensor its default controls: write back whatever was chosen for this camera. */
+ if(info.sensor_id==0x39){int e=apply_controls(selected,1);(void)e;}
+ return 0;
 }
 int apx_camera_buffer_busy(const void *buffer,size_t bytes) {
  if(info.state!=APX_CAMERA_CAPTURING||!bytes)return 0;
@@ -208,7 +394,16 @@ void apx_camera_shutdown(void) {
  /* Restore only this board's camera pins and clock fields, with DMA disabled. */
  update(0x884c,0x1f00,saved_divider);update(0x8848,0x20,saved_select);update(0x8840,1u<<27,saved_gate);
  update(0x8868,0x1fff,saved_aux);update(0x8348,0xc07,saved_mux);
- for(unsigned n=0;n<9;++n)update(pin_regs[n],0xffff,saved_pins[n]);
+ for(unsigned n=0;n<9;++n)update(pin_regs[n],APX_BOARD_SILVERGEAR?0xfffcu:0xffffu,saved_pins[n]);
+#if APX_BOARD_SILVERGEAR
+ for(unsigned n=0;n<9;++n)update(pin_regs[n]+4,0xc00,saved_enable[n]);
+#endif
  update(0x8850,1u<<26,saved_clock);initialized=claimed=0;info.state=APX_CAMERA_OFF;
 }
-void apx_camera_get_info(struct apx_camera_info *out) {if(out)*out=info;}
+unsigned apx_camera_count(void) {return APX_CAMERA_COUNT;}
+int apx_camera_select(enum apx_camera_id id) {
+ if((unsigned)id>=APX_CAMERA_COUNT)return APX_CAMERA_UNSUPPORTED;
+ if(info.state==APX_CAMERA_CAPTURING||(APX_HAS_PRINTER&&apx_printer_busy()))return APX_CAMERA_BUSY;
+ apx_camera_shutdown();selected=id;return apx_camera_init();
+}
+void apx_camera_get_info(struct apx_camera_info *out) {if(out){*out=info;out->selected=selected;out->count=APX_CAMERA_COUNT;}}

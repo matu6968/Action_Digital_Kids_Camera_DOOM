@@ -4,13 +4,15 @@
 #include <appotech/soc.h>
 #include <appotech/debug.h>
 #include <appotech/usb.h>
+#include <appotech/buttons.h>
+#include "board.h"
 #include <stdio.h>
 #define PM_CONTROL 0x88e0u
 #define PM_DATA 0x88ecu
 extern uint32_t apx_storage_prepare_bootrom(void);
 extern void apx_jpeg_shutdown(void);
 extern void apx_spi_shutdown(void),apx_battery_shutdown(void),apx_uart_shutdown(void);
-extern void apx_camera_shutdown(void);
+extern void apx_camera_shutdown(void),apx_printer_shutdown(void);
 extern void apx_audio_shutdown(void);
 extern void apx_mic_shutdown(void);
 extern void apx_display_shutdown(void),apx_sd_shutdown(void),apx_buttons_shutdown(void);
@@ -39,14 +41,30 @@ int apx_power_read(unsigned address,uint8_t *value) {
     return transfer(address,0,value);
 }
 static int write(unsigned address,unsigned value) { return transfer(address,value,NULL); }
+int apx_power_update(unsigned address,uint8_t mask,uint8_t bits) {
+    uint8_t value;
+    if(bits&~mask || apx_power_read(address,&value))return -1;
+    return write(address+1,(value&~mask)|bits);
+}
 int apx_power_domain_enable(void) {
     uint8_t value;
+#if APX_BOARD_SILVERGEAR
+    /* D-426 V03, stock 0202b2cc / 0202b54c. PM42 uses the stock 0xe0
+     * acknowledgement; PM44 must be read and echoed, not written zero.
+     * Preserve existing domain enables during an already-running RAM boot. */
+    if(apx_spr_read(PM_CONTROL)&0x108)return -1;
+    if(apx_power_update(0x40,0x04,0x04)||write(0x43,0xe0)||
+       apx_power_read(0x44,&value)||write(0x45,value))return -1;
+    if(apx_power_update(0x58,0x08,0x08)||apx_power_update(0x40,0x10,0x10)||
+       apx_power_update(0x5a,0x08,0x08))return -1;
+#else
     apx_spr_write(PM_CONTROL,apx_spr_read(PM_CONTROL)|0x40);
     if(write(0x41,0x06))return -1; /* stock 02026624(1): register 0x40 = 6 */
     if(write(0x43,0xe0)||write(0x45,0x00))return -1; /* stock 02026818(1) follows */
     if(apx_power_read(0x58,&value)||write(0x59,value|0x08))return -1;
     if(apx_power_read(0x40,&value)||write(0x41,value|0x10))return -1; /* 0x06|0x10 = 0x16 */
     if(write(0x5b,0x08))return -1;
+#endif
     /* Register 0x54 bit 5 is set on a running stock camera (0x21) and cleared by its power-off.
      * It powers the battery divider (ADC channel 9 reads ~0 without it). The vendor bootstrap
      * only sets it on some boot paths, so make sure it is. */
@@ -70,7 +88,7 @@ _Noreturn void apx_system_commit(enum apx_system_action action) {
     uint32_t deadline=apx_ticks()+16384;
     while(!apx_usb_tx_idle()&&!apx_deadline_expired(deadline))apx_usb_poll();
     apx_delay_ms(100); /* Finish the last host bulk URB. */
-    apx_camera_shutdown();apx_mic_shutdown();apx_audio_shutdown();apx_jpeg_shutdown();apx_uart_shutdown();apx_spi_shutdown();apx_battery_shutdown();apx_buttons_shutdown();apx_display_shutdown();apx_sd_shutdown();
+    apx_printer_shutdown();apx_camera_shutdown();apx_mic_shutdown();apx_audio_shutdown();apx_jpeg_shutdown();apx_uart_shutdown();apx_spi_shutdown();apx_battery_shutdown();apx_buttons_shutdown();apx_display_shutdown();apx_sd_shutdown();
     apx_spr_write(0xa004,apx_spr_read(0xa004)&~0x40u);
     apx_spr_write(0x18,apx_spr_read(0x18)&~2u);
     if(apx_clock_restore())apx_watchdog_reset();
@@ -87,7 +105,23 @@ uint32_t apx_reboot(void) {
     if(!result)apx_system_commit(APX_SYSTEM_REBOOT);
     return result;
 }
+#if APX_BOARD_SILVERGEAR
+/* The key ladder carries Power on this board. The stock shutdown (0200eb2c) waits until it reads "no key" before cutting the supply, otherwise
+ * the still-held key restarts the board. Bounded so a stuck key cannot block power-off forever; a no-op when the demo never started buttons. */
+static void wait_for_power_release(void) {
+    uint32_t deadline=apx_ticks()+10u*32768u;
+    for(;;) {
+        apx_buttons_poll();
+        struct apx_buttons_info info;apx_buttons_get_info(&info);
+        if(!(info.state&APX_BUTTON_POWER)||apx_deadline_expired(deadline))return;
+        apx_usb_poll();apx_maintenance(); /* keep USB and the watchdog serviced, as the commit path does while it drains TX */
+    }
+}
+#endif
 uint32_t apx_power_off(void) {
+#if APX_BOARD_SILVERGEAR
+    wait_for_power_release();
+#endif
     uint32_t result=apx_system_prepare(APX_SYSTEM_POWER_OFF);
     if(!result)apx_system_commit(APX_SYSTEM_POWER_OFF);
     return result;

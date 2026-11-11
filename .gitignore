@@ -2,10 +2,10 @@
 firmware/build*/
 firmware/build.log
 build-spi/
-tools/rescue/build/
+tools/flasher/build/
 toolchain/build/
 toolchain/install/
-third_party/
+/third_party/
 
 # your own backups
 backups/

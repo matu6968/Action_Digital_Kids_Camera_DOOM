@@ -29,6 +29,9 @@ uint32_t apx_ticks(void);
 /* Deadlines must be less than 2^31 ticks ahead; service ticks every <0.5 s. */
 static inline int apx_deadline_expired(uint32_t deadline) { return (int32_t)(apx_ticks()-deadline)>=0; }
 void apx_delay_ms(uint32_t milliseconds);
+/* Called by every wait of 1 ms or more in the drivers (apx_delay_ms, the camera's sensor bus, the SD driver through its own service): serves the USB link in TinyUSB builds, so
+ * an isochronous stream (the camera's microphone) keeps getting its data while the CPU waits. A no-op otherwise. */
+void apx_delay_service(void);
 void apx_runtime_init(void);
 /* Vendor-verified range maintenance for DDR DMA reads; 16-byte lines.
  * Returns -1 for a range outside DDR. Does not permit CPU writes to a source

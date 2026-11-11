@@ -12,6 +12,12 @@ struct apx_mic_info { uint32_t state,error,rate,bytes,status,ticks,completed,tim
  * Speaker DMA can run concurrently in a disjoint buffer. */
 int apx_mic_init(void);
 int apx_mic_capture_start(int16_t *pcm,size_t bytes,unsigned rate);
+/* Continuous capture: the same, but when a buffer is full only the DMA stops (the analog stage and the sample FIFO keep running); apx_mic_rearm() then starts the next buffer
+ * with no analog restart (a normal start puts a ~3 ms decaying DC step of several thousand counts at the start of every capture) and, called promptly, without losing samples
+ * (the FIFO holds them). The buffer rules are the same. Stop with apx_mic_stop(). */
+int apx_mic_capture_start_continuous(int16_t *pcm,size_t bytes,unsigned rate);
+int apx_mic_rearm(int16_t *pcm,size_t bytes);
+int apx_mic_rearm_prepared(int16_t *pcm,size_t bytes); /* rearm for a buffer already cleaned and invalidated by the caller: no cache work, a few microseconds */
 void apx_mic_poll(void);
 void apx_mic_stop(void);
 void apx_mic_shutdown(void);

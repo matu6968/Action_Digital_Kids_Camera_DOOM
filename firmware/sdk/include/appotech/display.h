@@ -1,11 +1,7 @@
 #ifndef APPOTECH_DISPLAY_H
 #define APPOTECH_DISPLAY_H
 #include <stdint.h>
-#define APX_DISPLAY_NATIVE_WIDTH 176u
-#define APX_DISPLAY_NATIVE_HEIGHT 220u
-/* Default logical dimensions for this board's landscape mounting. */
-#define APX_DISPLAY_WIDTH 220u
-#define APX_DISPLAY_HEIGHT 176u
+#include "board.h"
 #define APX_RGB565(r,g,b) ((uint16_t)((((r)&255u)>>3)<<11 | (((g)&255u)>>2)<<5 | (((b)&255u)>>3)))
 enum apx_display_state {
     APX_DISPLAY_OFF, APX_DISPLAY_INITIALIZING, APX_DISPLAY_READY,

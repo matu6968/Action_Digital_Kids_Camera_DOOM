@@ -114,9 +114,9 @@ static unsigned horizontal_ratio(unsigned source,unsigned target) {
  return (exponent<<18)|(((reduced<<16)+target-1)/target);
 }
 static int range(const void *p,size_t n) {uintptr_t a=(uintptr_t)p;return !(a&31)&&a>=APX_RAM_BASE&&a<APX_RAM_END&&n<=APX_RAM_END-a;}
-int apx_jpeg_decode_start(const void *jpeg,size_t bytes,void *output,size_t capacity,unsigned w,unsigned hgt) {
+static int decode_start(const void *jpeg,size_t bytes,void *output,size_t capacity,unsigned w,unsigned hgt,unsigned max_w,unsigned max_h) {
  if(info.state==APX_JPEG_DECODING||info.state==APX_JPEG_ENCODING)return APX_JPEG_BUSY;
- if(bytes<4||bytes>APX_RAM_END-APX_RAM_BASE||!w||!hgt||(w|hgt)&1||w>224||hgt>220)return APX_JPEG_RANGE;
+ if(bytes<4||bytes>APX_RAM_END-APX_RAM_BASE||!w||!hgt||(w|hgt)&1||w>max_w||hgt>max_h)return APX_JPEG_RANGE;
  unsigned pitch=(w+31)&~31u;size_t needed=(size_t)pitch*hgt*3/2;
  if(capacity<needed||!range(jpeg,(bytes+63)&~31u)||!range(output,needed))return APX_JPEG_RANGE;
  uintptr_t a=(uintptr_t)jpeg,b=(uintptr_t)output;
@@ -141,6 +141,12 @@ int apx_jpeg_decode_start(const void *jpeg,size_t bytes,void *output,size_t capa
  apx_spr_write(JD+0xc0,(header.width<<16)|pitch);
  output_buffer=output;output_bytes=needed;start=apx_ticks();deadline=start+65536;info.state=APX_JPEG_DECODING;
  apx_spr_write(JD,apx_spr_read(JD)|0x20000063u);return 0;
+}
+int apx_jpeg_decode_start(const void *jpeg,size_t bytes,void *output,size_t capacity,unsigned w,unsigned hgt) {
+ return decode_start(jpeg,bytes,output,capacity,w,hgt,224,220);
+}
+int apx_jpeg_decode_start_large(const void *jpeg,size_t bytes,void *output,size_t capacity,unsigned w,unsigned hgt) {
+ return decode_start(jpeg,bytes,output,capacity,w,hgt,APX_JPEG_LARGE_MAX_WIDTH,APX_JPEG_LARGE_MAX_HEIGHT);
 }
 static void stop(void) {
  apx_spr_write(JD,apx_spr_read(JD)|128u);apx_spr_write(JD,0);apx_spr_write(JD+0xb0,4092);
@@ -173,10 +179,26 @@ void apx_jpeg_poll(void) {
  info.ticks=apx_ticks()-start;
 }
 void apx_jpeg_get_info(struct apx_jpeg_info *out) {*out=info;}
+/* JPEG quality for encoding: 0 = the stock tables in jpeg_tables.inc (quality 90), 1..100 = the standard (Annex K) tables scaled the usual way (libjpeg's formula). */
+static unsigned encode_quality;
+void apx_jpeg_set_encode_quality(unsigned quality) {encode_quality=quality>100?100:quality;}
+static void scaled_quantizers(volatile uint8_t *t) {
+ static const uint8_t luma[64]={16,11,10,16,24,40,51,61,12,12,14,19,26,58,60,55,14,13,16,24,40,57,69,56,14,17,22,29,51,87,80,62,
+  18,22,37,56,68,109,103,77,24,35,55,64,81,104,113,92,49,64,78,87,103,121,120,101,72,92,95,98,112,100,103,99};
+ static const uint8_t chroma[64]={17,18,24,47,99,99,99,99,18,21,26,66,99,99,99,99,24,26,56,99,99,99,99,99,47,66,99,99,99,99,99,99,
+  99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99};
+ static const uint8_t zigzag[64]={0,1,8,16,9,2,3,10,17,24,32,25,18,11,4,5,12,19,26,33,40,48,41,34,27,20,13,6,7,14,21,28,
+  35,42,49,56,57,50,43,36,29,22,15,23,30,37,44,51,58,59,52,45,38,31,39,46,53,60,61,54,47,55,62,63};
+ const unsigned scale=encode_quality<50?5000u/encode_quality:200u-2u*encode_quality;
+ for(unsigned i=0;i<64;++i) {
+  unsigned l=(luma[zigzag[i]]*scale+50)/100,c=(chroma[zigzag[i]]*scale+50)/100;
+  t[i]=l<1?1:l>255?255:l;t[64+i]=c<1?1:c>255?255:c;
+ }
+}
 static void encoder_tables(void) {
  volatile uint8_t *t=(volatile uint8_t *)0x66000;
  for(unsigned i=0;i<1024;++i)t[i]=0;
- for(unsigned i=0;i<128;++i)t[i]=encode_quant[i];
+ if(encode_quality)scaled_quantizers(t);else for(unsigned i=0;i<128;++i)t[i]=encode_quant[i];
  for(unsigned i=0;i<64;++i)t[128+i]=encode_counts[i];
  static const unsigned offsets[]={192,220,248,426};
  unsigned symbol=0;

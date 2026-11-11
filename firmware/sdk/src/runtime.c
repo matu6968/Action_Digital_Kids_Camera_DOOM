@@ -15,13 +15,14 @@
 
 uint32_t apx_boot_context[6] __attribute__((section(".noinit")));
 extern unsigned char __bss_start[],__bss_end[],__heap_start[],__heap_end[];
+extern unsigned char __extra_bss_start[],__extra_bss_end[]; /* zero-initialised statics kept out of the runtime window (linker/ram.ld) */
 extern unsigned char __data_source[],__data_start[],__data_end[];
 extern void apx_spi_boot_prepare(void),apx_spi_boot_recovery(void);
 extern _Noreturn void apx_spi_boot_fail(unsigned id,uint32_t arg);
 unsigned apx_boot_from_spi(void){return apx_boot_context[4]==0x53504942u;}
 static unsigned char *heap_break;
 static uint32_t accumulated_ticks,previous_counter;
-static unsigned char log_ring[4096];
+static unsigned char log_ring[4096] __attribute__((section(".extra_bss"))); /* cleared with .bss in apx_runtime_init */
 static uint32_t log_in,log_out,log_lost;
 
 __attribute__((weak,noinline)) void apx_uart_console_put(char value){(void)value;}
@@ -45,6 +46,7 @@ __attribute__((weak,noinline)) void apx_jpeg_shutdown(void) {}
 __attribute__((weak,noinline)) void apx_audio_shutdown(void) {}
 __attribute__((weak,noinline)) void apx_mic_shutdown(void) {}
 __attribute__((weak,noinline)) void apx_camera_shutdown(void) {}
+__attribute__((weak,noinline)) void apx_printer_shutdown(void) {}
 __attribute__((weak,noinline)) void apx_spi_shutdown(void) {}
 __attribute__((weak,noinline)) void apx_battery_shutdown(void) {}
 __attribute__((weak,noinline)) void apx_uart_shutdown(void) {}
@@ -79,9 +81,12 @@ int apx_dma_clean(const void *buffer,size_t length) {
     }
     return 0;
 }
+/* Overridden by the TinyUSB shim: a delay that is long enough for a host to notice (camera selection takes 200 ms) must keep the USB link served, or an isochronous
+ * stream running at the time fails on the host (it needs data in every millisecond). */
+__attribute__((weak)) void apx_delay_service(void) {}
 void apx_delay_ms(uint32_t ms) {
     uint32_t start=apx_ticks(),duration=(ms*32768u+999u)/1000u;
-    while(apx_ticks()-start<duration) apx_maintenance();
+    while(apx_ticks()-start<duration) { apx_maintenance();apx_delay_service(); }
 }
 int apx_dma_invalidate(void *buffer,size_t length) {
     uintptr_t address=(uintptr_t)buffer;
@@ -152,6 +157,7 @@ void apx_runtime_init(void) {
     if(&__data_source[0]!=&__data_start[0])
         for(unsigned char *p=__data_start,*s=__data_source;p<__data_end;++p,++s) *p=*s;
     for(unsigned char *p=__bss_start;p<__bss_end;++p) *p=0;
+    for(unsigned char *p=__extra_bss_start;p<__extra_bss_end;++p) *p=0; /* same rule as .bss, in every boot mode */
     apx_exception_boot();    /* before installing: the record a crashed run left becomes the "previous" one */
     apx_exception_install();
     if(apx_boot_context[4]==0x53504942u) {
@@ -258,7 +264,7 @@ _Noreturn void apx_bootrom(void) {
     apx_exception_restore(); /* the loader and the next image bring their own handlers */
     /* Let the host complete its final bulk URB before removing the pull-up. */
     apx_delay_ms(100);
-    apx_camera_shutdown();apx_mic_shutdown();apx_audio_shutdown();apx_jpeg_shutdown();
+    apx_printer_shutdown();apx_camera_shutdown();apx_mic_shutdown();apx_audio_shutdown();apx_jpeg_shutdown();
     apx_uart_shutdown();apx_spi_shutdown();apx_battery_shutdown();apx_buttons_shutdown();
     apx_display_shutdown();
     apx_sd_shutdown();

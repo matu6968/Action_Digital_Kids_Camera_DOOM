@@ -1,5 +1,5 @@
 /* Cold-boot flight recorder; see include/appotech/trace.h.
- * PIO-only copy of the SPI sequence in boot/rom-rescue.c, which was verified on
+ * PIO-only copy of the SPI sequence in boot/flasher.c, which was verified on
  * hardware against the BootROM's own driver (BootROM 0x104ac4..0x104d20). It
  * uses the SPI state the BootROM left after loading this image (or the SDK
  * setup if that fails), needs no
@@ -89,9 +89,9 @@ static int jedec_ok(void){
     int e=xfer(0x9f,0,0);
     for(unsigned i=0;i<3&&!e;++i)e=xfer(255,1,id+i);
     cs(1);
-    return !e&&id[0]==0x5e&&id[1]==0x40&&id[2]==0x15;
+    return !e&&id[0]==(APX_SPI_JEDEC>>16)&&id[1]==((APX_SPI_JEDEC>>8)&255)&&id[2]==(APX_SPI_JEDEC&255);
 }
-/* Same controller bring-up as apx_spi_init() and boot/rom-rescue.c command 0. */
+/* Same controller bring-up as apx_spi_init() and boot/flasher.c command 0. */
 static void spi_setup(void){
     upd(0x8850,0xf0000000,0x30000000);upd(0x8844,8,0);upd(0x8840,1u<<20,0);
     upd(0x8344,3u<<20,1u<<20);upd(0x8100,0xd00,0xd00);upd(0x8040,0xd00,0);upd(0x8000,0x400,0x400);

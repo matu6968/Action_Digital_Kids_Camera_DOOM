@@ -34,8 +34,10 @@ __attribute__((weak,noinline)) void apx_mic_poll(void) {}
 __attribute__((weak,noinline)) void apx_camera_poll(void) {}
 __attribute__((weak,noinline)) void apx_battery_poll(void) {}
 __attribute__((weak,noinline)) void apx_uart_poll(void) {}
+extern void apx_sd_poll(void) __attribute__((weak));
 void apx_maintenance(void) {
     if(automatic)apx_watchdog_feed();
+    if(apx_sd_poll)apx_sd_poll(); /* closes an idle SD write stream; only present when the SD driver is linked */
     apx_audio_poll();
     apx_mic_poll();
     apx_camera_poll();

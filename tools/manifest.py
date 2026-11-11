@@ -8,6 +8,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 p=argparse.ArgumentParser()
 p.add_argument('elf',type=Path)
+p.add_argument('--board',choices=('action-vision','silvergear-3222882'),default='action-vision')
 p.add_argument('--build-id',required=True)
 p.add_argument('--vid',type=lambda s:int(s,0),default=0x1908)
 p.add_argument('--pid',type=lambda s:int(s,0),default=0x3319)
@@ -50,13 +51,23 @@ with args.elf.open('rb') as stream:
     lvgl_tables=elf.get_section_by_name('.lvgl_tables')
     doom_image=elf.get_section_by_name('.doom_image')
     doom_bss=elf.get_section_by_name('.doom_bss')
-    if any(section and section['sh_size'] for section in (fatfs_section,large_section,jpeg_code,audio_code,camera_code,peripheral_code,lvgl_code,lvgl_tables,doom_bss)):
+    usb_code=elf.get_section_by_name('.usb_code')
+    usb_tables=elf.get_section_by_name('.usb_tables')
+    extra_bss=elf.get_section_by_name('.extra_bss')
+    if any(section and section['sh_size'] for section in (fatfs_section,jpeg_code,audio_code,camera_code,peripheral_code,usb_code,usb_tables,extra_bss,lvgl_code,lvgl_tables,doom_bss)):
         reservations.append([0x02220000,0xc0000])
+    # The NOLOAD application buffers live in free DDR below the runtime window. Windows are listed in this fixed order
+    # (apxtool.sdk.ALLOWED_RESERVATIONS and the SDK's own owned_ram report use it too).
+    # DOOM keeps the SPI driver's 4 KiB bounce buffer (.large_buffer) in the runtime window and the WAD in the free DDR below it, so the low
+    # application-buffer window is only reserved when that section really sits there.
+    large_low=bool(large_section and large_section['sh_size'] and 0x02080000<=large_section['sh_addr']<0x02100000)
+    if large_low:
+        reservations.append([0x02080000,0x80000])
     if (jpeg_section and jpeg_section['sh_size']) or (doom_image and doom_image['sh_size']) or \
        (lvgl_code and lvgl_code['sh_size']) or (lvgl_tables and lvgl_tables['sh_size']):
         reservations.append([0x022e0000,0x120000])
     if fatfs_section and fatfs_section['sh_size']:
-        provenance['fatfs']={'version':'R0.16','sha256':{name:hashlib.sha256((sdk/'firmware/sdk/fatfs'/name).read_bytes()).hexdigest() for name in ('ff.c','ff.h','ffconf.h','ffunicode.c','diskio.h')}}
+        provenance['fatfs']={'version':'R0.16','sha256':{name:hashlib.sha256((sdk/'firmware/sdk/third_party/fatfs'/name).read_bytes()).hexdigest() for name in ('ff.c','ff.h','ffconf.h','ffunicode.c','diskio.h')}}
     for index,segment in enumerate(elf.iter_segments()):
         if segment['p_type']!='PT_LOAD':continue
         address,size=segment['p_vaddr'],segment['p_memsz']
@@ -71,6 +82,7 @@ with args.elf.open('rb') as stream:
     symbols=elf.get_section_by_name('.symtab')
     spi_entry=symbols.get_symbol_by_name('apx_spi_entry')
     manifest={'spi_entry':spi_entry[0]['st_value'] if spi_entry else None,'schema_version':1,'entry':elf.header.e_entry,'build_id':args.build_id,
+              'board':args.board,'capabilities':{'cameras':2 if args.board=='silvergear-3222882' else 1,'printer':args.board=='silvergear-3222882'},
               'elf_sha256':hashlib.sha256(args.elf.read_bytes()).hexdigest(),
               'reservations':reservations,
               'segments':segments,'clock_policy':'sdk-pll1-144' if args.cpu_mhz==144 else 'inherit-loader-96',
@@ -81,9 +93,9 @@ with args.elf.open('rb') as stream:
               'toolchain':provenance}
     if fatfs_section and fatfs_section['sh_size']:
         manifest['fatfs_tables']={'address':fatfs_section['sh_addr'],'bytes':fatfs_section['sh_size'],'reservation_bytes':0xc0000}
-    if large_section and large_section['sh_size']:
+    if large_low:
         manifest['application_buffer']={'address':large_section['sh_addr'],'bytes':large_section['sh_size'],
-            'reservation_bytes':0xc0000,'initialization':'zero enforced by launch preflight'}
+            'reservation_bytes':0x80000,'initialization':'zero enforced by launch preflight'}
     if dma_section and dma_section['sh_size']:
         manifest['display_dma_workspace']={'address':dma_section['sh_addr'],
             'bytes':dma_section['sh_size'],'reservation_bytes':65536,
@@ -108,7 +120,7 @@ with args.elf.open('rb') as stream:
         camera_tables=elf.get_section_by_name('.camera_tables')
         manifest['camera_code']={'address':camera_code['sh_addr'],'bytes':camera_code['sh_size'],
             'table_bytes':camera_tables['sh_size'] if camera_tables else 0,
-            'sensor_init_sha256':hashlib.sha256((sdk/'firmware/sdk/src/camera_sensor.inc').read_bytes()).hexdigest()}
+            'sensor_init_sha256':hashlib.sha256((sdk/('firmware/sdk/boards/silvergear-3222882/sensors.inc' if args.board=='silvergear-3222882' else 'firmware/sdk/src/camera_sensor.inc')).read_bytes()).hexdigest()}
     if lvgl_code and lvgl_code['sh_size']:
         manifest['lvgl']={'address':lvgl_code['sh_addr'],'bytes':lvgl_code['sh_size'],
             'table_address':lvgl_tables['sh_addr'] if lvgl_tables else 0,

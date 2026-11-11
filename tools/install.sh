@@ -10,6 +10,9 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 export PYTHONPATH="$here/python${PYTHONPATH:+:$PYTHONPATH}"
+# Cold-boot images exist for the Action Vision only: the Silvergear's SPI layout has no room for the overlay scheme this build uses
+# (see docs/FLASHING.md), so the Silvergear is RAM-launch only (tools/launch.sh) for now.
+[ "${BOARD:-action-vision}" = action-vision ] || { echo "SPI install is Action Vision only; use tools/launch.sh for BOARD=$BOARD" >&2; exit 1; }
 image=${1:?usage: install.sh IMAGE [backup-dir]}
 backups=${2:-backups}
 mkdir -p "$backups"

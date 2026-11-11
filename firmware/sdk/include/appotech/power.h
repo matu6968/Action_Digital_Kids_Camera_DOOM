@@ -15,6 +15,8 @@ _Noreturn void apx_system_commit(enum apx_system_action action);
 /* Internal always-powered bus, bounded and preserving unrelated control bits.
  * Read command addresses are even, 0x40..0x5a. Public writes not exposed. */
 int apx_power_read(unsigned address,uint8_t *value);
+/* Masked board peripheral control; address is the even read address. */
+int apx_power_update(unsigned address,uint8_t mask,uint8_t bits);
 /* Stock start-up power-domain sequence (stock 02026624(1) then 02026818(1)):
  * PM bus enable bit, then registers 0x40=0x06, 0x42=0xe0, 0x44=0x00,
  * 0x58|=0x08, 0x40|=0x10 (=0x16), 0x5a=0x08, and 0x54 bit 5 (battery divider, =0x21). These live in the always-powered

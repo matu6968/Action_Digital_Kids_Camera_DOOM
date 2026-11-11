@@ -15,8 +15,18 @@
  * survives a hang or reset the instant it is made. Only that one sector is ever
  * touched, and tracing silently disables itself unless the JEDEC ID matches.
  * Decode with `apxtool trace decode` or `apxtool rom-rescue trace`. */
-#define APX_TRACE_SECTOR 0x001ff000u
-#define APX_TRACE_LAUNCH_SECTOR 0x001fe000u /* log of a USB-launched run; the SPI boot that follows a crash must not erase it */
+#if __has_include("board.h")
+#include "board.h"
+#endif
+#ifndef APX_SPI_TRACE_SECTOR /* no board header on the include path: the Action camera's last two sectors */
+#define APX_SPI_TRACE_SECTOR 0x001ff000u
+#define APX_SPI_TRACE_LAUNCH_SECTOR 0x001fe000u
+#endif
+#ifndef APX_SPI_JEDEC
+#define APX_SPI_JEDEC 0x5e4015u
+#endif
+#define APX_TRACE_SECTOR APX_SPI_TRACE_SECTOR
+#define APX_TRACE_LAUNCH_SECTOR APX_SPI_TRACE_LAUNCH_SECTOR /* log of a USB-launched run; the SPI boot that follows a crash must not erase it */
 #define APX_TRACE_REGS_OFFSET 0x100u
 #define APX_TRACE_CRUMBS_OFFSET 0x800u
 #define APX_TRACE_SPR_COUNT 32u

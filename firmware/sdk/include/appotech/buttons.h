@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 enum apx_button { APX_BUTTON_SHUTTER=1u,APX_BUTTON_DOWN=2u,APX_BUTTON_UP=4u,
-                  APX_BUTTON_LEFT=8u,APX_BUTTON_RIGHT=16u,APX_BUTTON_POWER=32u };
+                  APX_BUTTON_LEFT=8u,APX_BUTTON_RIGHT=16u,APX_BUTTON_POWER=32u,APX_BUTTON_MENU=64u,APX_BUTTON_PRINT=128u,APX_BUTTON_CAMERA=256u,APX_BUTTON_EXIT=512u,APX_BUTTON_MODE=APX_BUTTON_MENU };
 struct apx_button_event { uint32_t ticks,state,pressed,released; };
 struct apx_buttons_info {
     uint32_t state,raw_state,adc_timeouts,events_dropped;
@@ -11,7 +11,8 @@ struct apx_buttons_info {
 };
 /* Poll at least every 5 ms; 20 ms debounce, 16 queued press/release events.
  * No power button policy: applications decide what a press does.
- * Owns board PB0/PB1/PB5 and ADC channel 3 until shutdown. */
+ * Owns the board's button and LED pads and ADC channel 3 until shutdown
+ * (Action camera PB0/PB1/PB5; Silvergear PB0 flash LED and PB1). */
 void apx_buttons_init(void);
 void apx_buttons_poll(void);
 void apx_buttons_get_info(struct apx_buttons_info *info);

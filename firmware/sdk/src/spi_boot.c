@@ -7,6 +7,7 @@
 #include <appotech/buttons.h>
 #include <appotech/trace.h>
 #include <appotech/exception.h>
+#include "board.h"
 extern uint32_t apx_boot_context[6];
 extern _Noreturn void apx_jump_to_rom_from_boot(uint32_t stack);
 extern void apx_cache_flush_range(const void *start,const void *end);
@@ -48,10 +49,10 @@ _Noreturn void apx_spi_boot_fail(unsigned id,uint32_t arg){
  __builtin_unreachable();
 }
 void apx_spi_boot_prepare(void){
- /* SRAM 0x1e6c is the bootstrap's saved ROM stack page (SPI 0540..0580).
-  * Restore the page just as SPI 0584..05c8 does, without returning to boot.
+ /* APX_SPI_BOOT_SAVED_STACK (Action SRAM 0x1e6c, Silvergear 0x1c94) is the bootstrap's saved ROM stack page
+  * (Action SPI 0540..0580). Restore the page just as the bootstrap's return path does, without returning to boot.
   * The saved r1 points at the pushed return PC, so recovery uses r1+4. */
- const volatile uint32_t *saved=(const volatile uint32_t *)0x1e6c;
+ const volatile uint32_t *saved=(const volatile uint32_t *)APX_SPI_BOOT_SAVED_STACK;
  uint32_t stack=saved[0],base=stack&~255u;
  if(stack<0x4000||stack>=0x4f74||(stack&3)){apx_trace(APX_TRACE_FAIL_STACK,stack);apx_watchdog_reset();}
  volatile uint32_t *target=(volatile uint32_t *)(uintptr_t)base;

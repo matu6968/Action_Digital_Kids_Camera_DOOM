@@ -3,6 +3,8 @@
 #include <appotech/soc.h>
 #include <appotech/debug.h>
 #include <appotech/trace.h>
+#include "board.h"
+#include "battery_internal.h"
 #include <stdio.h>
 #include <string.h>
 static struct apx_battery_info info;
@@ -15,7 +17,7 @@ static const uint16_t thresholds[5]={3660,3762,3860,3964,4060};
 int apx_battery_init(void){
  if(info.initialized)return 0;
  memset(&info,0,sizeof(info));info.level=0xff;
- uint32_t calibration=apx_mmio_read32(0x1fec);
+ uint32_t calibration=apx_mmio_read32(APX_BATTERY_CALIBRATION_ADDRESS);
  if(calibration<400||calibration>1600)return -1;
  info.calibration=calibration;apx_adc_acquire(APX_ADC_BATTERY);info.initialized=1;
  /* Channel 11 samples an internal reference that only exists while 0x8868 bit 15 is set.
@@ -31,7 +33,7 @@ int apx_battery_init(void){
 static void publish(void){
  info.adc_battery=sum_battery>>4;info.adc_reference=sum_reference>>4;
  if(info.adc_reference&&info.adc_battery<1023&&info.adc_reference<1023){
-  uint32_t mv=2u*((uint32_t)info.adc_battery*info.calibration/info.adc_reference)+20;
+  uint32_t mv=2u*((uint32_t)info.adc_battery*info.calibration/info.adc_reference)+APX_BATTERY_OFFSET_MV;
   if(mv>=2500&&mv<=5000){unsigned level=0;while(level<5&&mv>thresholds[level])++level;
    if(info.level>5||(level<info.level&&mv+30<thresholds[level])||
       (level>info.level&&mv>thresholds[info.level]+30u))info.level=level;
@@ -61,6 +63,15 @@ void apx_battery_poll(void){
  else if(!phase&&(int32_t)(now-next_sample)>=0){if(!apx_adc_begin(APX_ADC_BATTERY,9)){phase=1;discard=1;}}
 }
 void apx_battery_get_info(struct apx_battery_info *out){if(out)*out=info;}
+void apx_battery_defer_conversion(void){
+ /* A 32-pass printer half-row can exceed the ADC's 5 ms transaction deadline.
+  * Do not leave a battery conversion outstanding across that section. This
+  * is deliberate cancellation, not a conversion failure or a fresh sample. */
+ if(info.initialized&&(phase==1||phase==3)){
+  apx_adc_release(APX_ADC_BATTERY);apx_adc_acquire(APX_ADC_BATTERY);
+  phase=discard=0;next_sample=apx_ticks();
+ }
+}
 void apx_battery_shutdown(void){
  if(info.initialized){apx_adc_release(APX_ADC_BATTERY);
   apx_spr_write(0x8868,(apx_spr_read(0x8868)&~REFERENCE_ENABLE)|saved_reference);}
