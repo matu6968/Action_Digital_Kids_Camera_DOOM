@@ -48,7 +48,12 @@ if [ "$kind" = sdk ]; then
   # back to the BootROM loader, then launch immediately: the loader gives up after ~3 s
   dev=$(apx debug --port "$port" bootrom | sed -n 's/.*ready at \(\/dev\/sg[0-9]*\).*/\1/p')
 else
-  dev=$(ls /dev/sg* 2>/dev/null | head -1)
+  # the SCSI generic device that sits under this camera's USB port (never just "the first /dev/sg*": that may be a disk or the other camera)
+  dev=""
+  for g in /sys/class/scsi_generic/sg*; do
+    [ -e "$g/device" ] || continue
+    case "$(readlink -f "$g/device")" in */"$port"/*) dev=/dev/$(basename "$g"); break;; esac
+  done
 fi
 [ -n "$dev" ] || { echo "no SCSI generic device for the camera (stock firmware must be in USB mass-storage mode)" >&2; exit 1; }
 apx --device "$dev" sdk launch "$manifest" "$@"
