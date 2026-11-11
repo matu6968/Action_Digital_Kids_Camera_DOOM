@@ -64,6 +64,7 @@ with args.elf.open('rb') as stream:
     if large_low:
         reservations.append([0x02080000,0x80000])
     if (jpeg_section and jpeg_section['sh_size']) or (doom_image and doom_image['sh_size']) or \
+       (doom_bss and doom_bss['sh_size'] and doom_bss['sh_addr']>=0x022e0000) or \
        (lvgl_code and lvgl_code['sh_size']) or (lvgl_tables and lvgl_tables['sh_size']):
         reservations.append([0x022e0000,0x120000])
     if fatfs_section and fatfs_section['sh_size']:

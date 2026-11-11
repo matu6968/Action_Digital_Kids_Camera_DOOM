@@ -26,6 +26,12 @@
 /* Thermal printer (384 dots wide): PRINT key -> screenshot sticker, see port/doom_print.c. */
 #define BOARD_HAS_PRINTER 1
 
+/* SPI cold boot: no overlay (the sector the overlay table would use, 0x1fc000, holds stock data here); the BootROM loads the whole engine
+ * ("flat" layout in linker/doom.ld). A WAD stored deflated in flash goes right behind that image and must end below 0x300000: the stock
+ * photos start at 0x381000, the settings are at 0x3ff000 and the SDK's flight recorder uses 0x3fd000/0x3fe000. */
+#define BOARD_SPI_OVERLAY     0
+#define BOARD_WAD_FLASH_LIMIT 0x300000u
+
 /* Name used in the boot banner. */
 #define BOARD_NAME        "Silvergear camera"
 

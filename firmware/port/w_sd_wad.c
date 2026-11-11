@@ -96,7 +96,7 @@ static int load_wad_from_flash(void)
     int rc = 1;
     if (base && apx_spi_read(base, &h, sizeof h) == APX_SPI_OK && h.magic == ZWAD_MAGIC) {
         const size_t capacity = (size_t)(__wad_buffer_end - __wad_buffer_start) - FOOTER_SIZE;
-        if (h.raw_len < 12 || h.raw_len > capacity || h.comp_len < 2 || base + sizeof h + h.comp_len > APX_SPI_OVERLAY_TABLE) {
+        if (h.raw_len < 12 || h.raw_len > capacity || h.comp_len < 2 || base + sizeof h + h.comp_len > BOARD_WAD_FLASH_LIMIT) {
             rc = -1;
         } else {
             plat_status("DOOM", "UNPACKING WAD", "FROM FLASH", 0);

@@ -24,6 +24,11 @@
 /* No thermal printer on this camera: port/doom_print.c is a stub. */
 #define BOARD_HAS_PRINTER 0
 
+/* SPI cold boot: the engine is an overlay in free flash (copied to the codec bank at start-up, see linker/doom.ld), and a WAD stored
+ * deflated in flash must end before the overlay table at 0x1fc000. */
+#define BOARD_SPI_OVERLAY     1
+#define BOARD_WAD_FLASH_LIMIT 0x1fc000u
+
 /* Name used in the boot banner and on the text screens. */
 #define BOARD_NAME        "Action Vision camera"
 

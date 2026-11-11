@@ -39,6 +39,16 @@ ifeq ($(filter $(EXTRA_CODE),0 1),)
 $(error EXTRA_CODE must be 0 or 1)
 endif
 
+# Where the engine goes. overlay: an overlay in the codec bank, copied from flash at start-up (the Vision's SPI image). flat: loaded code in the
+# extra bank behind the SDK's, its zeroed state in the codec bank (the Silvergear: its flash has no room for the overlay table). Needs EXTRA_CODE=1.
+LAYOUT ?= $(if $(filter silvergear-3222882,$(BOARD)),flat,overlay)
+ifeq ($(filter $(LAYOUT),overlay flat),)
+$(error LAYOUT must be overlay or flat)
+endif
+ifeq ($(LAYOUT)$(EXTRA_CODE),flat0)
+$(error LAYOUT=flat needs EXTRA_CODE=1)
+endif
+
 # SDK options (see sdk/README.md for what they mean)
 OPT_SDK  ?= -Os
 HEAP_SIZE ?= 12288
@@ -87,7 +97,7 @@ LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
 BUILD_ID := $(shell { cat $(SDK)/src/*.c $(SDK)/src/*.S $(SDK)/src/*.inc $(SDK)/src/*.h $(SDK)/src/tusb/* $(SDK)/include/appotech/*.h \
     $(SDK)/boards/$(BOARD)/* $(SDK)/third_party/fatfs/ff.c $(SDK)/third_party/fatfs/ffconf.h \
     $(PORT)/* $(BOARDDIR)/doom_board.h linker/doom.ld $(GBA)/source/*.c $(GBA)/include/*.h Makefile; \
-    printf '%s\n' '$(BOARD)' '$(OPT_SDK)' '$(HEAP_SIZE)' '$(EXTRA_CFLAGS)' '$(USB_VID)' '$(USB_PID)' '$(CPU_MHZ)' '$(DOOM_STATS)' '$(APX_USB_MSC)' '$(EXTRA_CODE)'; } | sha256sum | cut -c1-16)
+    printf '%s\n' '$(BOARD)' '$(OPT_SDK)' '$(HEAP_SIZE)' '$(EXTRA_CFLAGS)' '$(USB_VID)' '$(USB_PID)' '$(CPU_MHZ)' '$(DOOM_STATS)' '$(APX_USB_MSC)' '$(EXTRA_CODE)' '$(LAYOUT)'; } | sha256sum | cut -c1-16)
 
 COMMON := -mappotech -fno-delayed-branch -fno-pic -ffunction-sections -fdata-sections -fno-common -Wall -Wextra
 SDKDEFS := -DAPX_NO_STORAGE_COMMAND -DAPX_BUILD_ID='"$(BUILD_ID)"' -DAPX_USB_VID=$(USB_VID) -DAPX_USB_PID=$(USB_PID) -DAPX_USB_FORCE_FULL_SPEED=0 \
@@ -103,7 +113,7 @@ SDK_CFLAGS := -g $(OPT_SDK) $(COMMON) -Werror $(SDKINC) $(SDKDEFS)
 SDK_LTO_CFLAGS := $(SDK_CFLAGS) -flto -fuse-linker-plugin
 LTO_PLACED := uart adc battery spi printer printer_render photo_prepare camera camera_files audio audio_files microphone microphone_files jpeg jpeg_files ffunicode
 LTO_PLACED_OBJS := $(if $(filter 1,$(EXTRA_CODE)),$(addprefix $(BUILD)/sdk/,$(addsuffix .o,$(LTO_PLACED))) $(TUSB_SEPARATE))
-LD_SCRIPT := $(if $(filter 1,$(EXTRA_CODE)),linker/doom.ld,$(BUILD)/doom-compact.ld)
+LD_SCRIPT := $(BUILD)/doom.ld
 
 EXTRA_CFLAGS ?=
 ENGINE_CFLAGS := $(EXTRA_CFLAGS) -g -O2 -std=gnu11 $(COMMON) -I$(GBA)/include -I$(PORT) -I$(BOARDDIR) $(SDKINC) \
@@ -164,9 +174,15 @@ $(BUILD)/doom/%.S.o: %.S | $(BUILD)/doom
 	$(CC) $(ENGINE_CFLAGS) -c $< -o $@
 
 # Link -----------------------------------------------------------------------------------------------------------------
-# compact layout: the same script without the extra-bank code blocks (the sections fall through to .text/.rodata in the runtime window)
-$(BUILD)/doom-compact.ld: linker/doom.ld | $(BUILD)
-	sed -e '/EXTRA_CODE_BEGIN/,/EXTRA_CODE_END/d' $< > $@
+# The linker script for this board: doom.ld with the blocks of the other layout removed (OVL_/FLAT_ markers, and the two IMAGE_/BSS_REGION tags
+# that swap the banks), and with the extra-bank code blocks removed when EXTRA_CODE=0 (the "compact" layout: those sections fall through to
+# .text/.rodata in the runtime window).
+SED_OVERLAY := -e '/FLAT_BEGIN/,/FLAT_END/d'
+SED_FLAT    := -e '/OVL_BEGIN/,/OVL_END/d' -e 's|> CODEC_RAM /\*IMAGE_REGION\*/|> EXTRA_RAM|' -e 's|> EXTRA_RAM /\*BSS_REGION\*/|> CODEC_RAM|'
+SED_COMPACT := -e '/EXTRA_CODE_BEGIN/,/EXTRA_CODE_END/d'
+LD_SED := $(if $(filter overlay,$(LAYOUT)),$(SED_OVERLAY),$(SED_FLAT)) $(if $(filter 0,$(EXTRA_CODE)),$(SED_COMPACT))
+$(BUILD)/doom.ld: linker/doom.ld Makefile | $(BUILD)
+	sed $(LD_SED) $< > $@
 $(BUILD)/doom.elf: $(BUILD)/sdk/startup.o $(DOOM_OBJS) $(BUILD)/libappotech.a $(BUILD)/libfatfs.a $(LD_SCRIPT) $(LIBC) $(LIBGCC)
 	$(CC) $(SDK_LTO_CFLAGS) -Wl,-u,stdout,-u,sbrk,-u,__mulsi3,-u,__udivsi3,-u,__divsi3,-u,__umodsi3,-u,__modsi3 -nostartfiles -T$(LD_SCRIPT) \
 	    -Wl,-e,_start,--gc-sections,--build-id=none,--defsym=APX_HEAP_SIZE=$(HEAP_SIZE),-Map,$(BUILD)/doom.map -o $@ \

@@ -38,6 +38,7 @@ int main(void)
     if (!apx_uart_init(115200, 6, -1)) apx_uart_console_enable(1);
     boot_trail("DOOM: main");
     apx_usb_init();
+#if BOARD_SPI_OVERLAY
     boot_trail("DOOM: usb up, loading overlay");
     /* The engine's code lives above the window the BootROM loads: on an SPI boot copy it into place first, before anything
      * from build/doom/ (all of it except this file) is called. A USB launch has loaded every segment already: no-op. */
@@ -47,14 +48,25 @@ int main(void)
         boot_trail("DOOM: SPI overlay load FAILED");
         for (;;) apx_debug_poll();
     }
+#else
+    /* Flat layout (Silvergear): the BootROM loaded the whole engine in one block, there is no overlay to copy. Do NOT call
+     * apx_spi_overlay_load(): it would read the stock data in sector 0x1fc000 and report an invalid table. */
+    boot_trail("DOOM: usb up");
+#endif
 #if DOOM_STATS
     /* Development builds keep the SPI flash driver initialised so `apxtool debug flash read/install` works on a launched image
      * (tools/install.sh). The WAD loader then leaves it alone. Release builds (DOOM_STATS=0) only open it while unpacking. */
     apx_spi_init();
 #endif
-    boot_trail("DOOM: overlay in place");
-    /* The engine's zeroed state lives outside the SDK's .bss: a USB launch has it zeroed, an SPI boot does not. */
-    memset(__doom_bss_start, 0, (size_t)(__doom_bss_end - __doom_bss_start));
+    boot_trail(BOARD_SPI_OVERLAY ? "DOOM: overlay in place" : "DOOM: image in place");
+    /* The engine's zeroed state lives outside the SDK's .bss: a USB launch has it zeroed, an SPI boot does not. Cleared in pieces so that
+     * the watchdog (which the BootROM leaves armed for a couple of seconds) is fed while 450-660 KiB of DDR is written. */
+    for (unsigned char *p = __doom_bss_start; p < __doom_bss_end;) {
+        const size_t n = (size_t)(__doom_bss_end - p) > 65536u ? 65536u : (size_t)(__doom_bss_end - p);
+        memset(p, 0, n);
+        p += n;
+        apx_maintenance();
+    }
 
     boot_trail("DOOM: engine state cleared");
     apx_buttons_init();

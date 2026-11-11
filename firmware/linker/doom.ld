@@ -21,6 +21,13 @@
  * contiguous block from 0x02180000, and the hole between the runtime block and the extra bank is stored as zeros in flash.
  * The SDK code that has to live in the extra bank (see above) does put a file-backed segment up there, so an SPI image of this
  * layout carries that hole (about 0.5 MiB); see docs/FLASHING.md for the flash budget.
+ *
+ * Two layouts come out of this one script (the Makefile picks one with sed, see LAYOUT there):
+ *   overlay (Vision)   the engine is an overlay in the codec bank, copied from free flash at start-up by apx_spi_overlay_load(); its zeroed
+ *                      state is in the extra bank. The text above describes this one.
+ *   flat (Silvergear)  no overlay: that sector of the Silvergear's flash holds stock data. The engine is ordinary loaded code in the extra
+ *                      bank behind the SDK's code there, so the BootROM's single block (0x02180000 .. below 0x022e0000) carries all of it;
+ *                      the engine's zeroed state moves to the codec bank, which stores nothing. Needs EXTRA_CODE=1.
  */
 ENTRY(_start)
 MEMORY { RUNTIME (rwx) : ORIGIN = 0x02180000, LENGTH = 128K
@@ -31,6 +38,7 @@ MEMORY { RUNTIME (rwx) : ORIGIN = 0x02180000, LENGTH = 128K
          WAD_RAM (rw) : ORIGIN = 0x02000000, LENGTH = 1536K }
 __heap_size = DEFINED(APX_HEAP_SIZE) ? APX_HEAP_SIZE : 12K;
 SECTIONS {
+ /*IMAGE_REGION: overlay = CODEC_RAM, flat = EXTRA_RAM*/
  /* Engine and port: every object built into build/doom/ except main.c, which runs before the overlay is in place. (hwmuldiv.S, which SDK code calls before that,
   * is an SDK object in sdk/src and so already in the runtime window.)
   * One fully initialised segment: the SPI packer stores segments above 0x022e0000 as overlays and requires exactly that. */
@@ -43,7 +51,7 @@ SECTIONS {
     *libgcc.a:*(.text .text.* .rodata .rodata.*)
     . = ALIGN(16);
     __doom_image_end = .;
- } > CODEC_RAM
+ } > CODEC_RAM /*IMAGE_REGION*/
  /*EXTRA_CODE_BEGIN*/
  /* SDK code placed in the extra bank by object file name (the SDK Makefile keeps these objects out of LTO for that reason). Same sections as
   * the SDK's linker/ram.ld; the groups the DOOM image does not link (camera, JPEG, audio files, microphone) are simply empty. */
@@ -78,12 +86,21 @@ SECTIONS {
     *(.jpeg_buffer .jpeg_buffer.*)
     . = ALIGN(32);
     __doom_bss_end = .;
- } > EXTRA_RAM
+ } > EXTRA_RAM /*BSS_REGION*/
+ /*OVL_BEGIN*/
  /* SDK ownership bookkeeping (src/debug.c): the whole extra bank, from its start to the end of the DOOM state. */
  __extra_ram_start = ORIGIN(EXTRA_RAM); __extra_ram_end = __doom_bss_end;
  /* SDK bookkeeping names: the "JPEG buffer" bounds are the code bank (APXD protects it). */
  __jpeg_buffer_start = __doom_image_start;
  __jpeg_buffer_end = __doom_image_end;
+ /*OVL_END*/
+ /*FLAT_BEGIN*/
+ /* Flat layout: the extra bank ends where the SDK's .extra_bss does; the codec bank ("JPEG buffer" to the SDK: it clears it on an SPI boot and
+  * APXD protects it) holds the engine's zeroed state. */
+ __extra_ram_start = ORIGIN(EXTRA_RAM); __extra_ram_end = __extra_bss_end;
+ __jpeg_buffer_start = ORIGIN(CODEC_RAM);
+ __jpeg_buffer_end = __doom_bss_end;
+ /*FLAT_END*/
  .text : ALIGN(4) { FILL(0x00000015) KEEP(*(.text.entry)) *(.text .text.*) } > RUNTIME
  .rodata : ALIGN(4) { *(.rodata .rodata.*) } > RUNTIME
  .data : ALIGN(4) { __data_start = .; *(.data .data.* .sdata .sdata.*) __data_end = .; } > RUNTIME
@@ -107,5 +124,12 @@ SECTIONS {
  /DISCARD/ : { *(.eh_frame*) *(.comment) *(.note*) }
 }
 ASSERT(__runtime_used_end <= ORIGIN(RUNTIME)+LENGTH(RUNTIME), "SDK exceeds runtime reservation")
+/*OVL_BEGIN*/
 ASSERT(__doom_image_end <= ORIGIN(CODEC_RAM)+LENGTH(CODEC_RAM), "DOOM image exceeds the 1152 KiB code bank")
 ASSERT(__doom_bss_end <= ORIGIN(EXTRA_RAM)+LENGTH(EXTRA_RAM), "DOOM buffers exceed the 768 KiB extra bank")
+/*OVL_END*/
+/*FLAT_BEGIN*/
+ASSERT(__extra_bss_end <= ORIGIN(EXTRA_RAM)+LENGTH(EXTRA_RAM), "SDK code + DOOM image exceed the 768 KiB extra bank")
+ASSERT(__doom_bss_end <= ORIGIN(CODEC_RAM)+LENGTH(CODEC_RAM), "DOOM buffers exceed the 1152 KiB codec bank")
+ASSERT(__doom_image_end <= 0x022e0000, "the BootROM loads nothing above 0x022e0000: the flat image is too big")
+/*FLAT_END*/
