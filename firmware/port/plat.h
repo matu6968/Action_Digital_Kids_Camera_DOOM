@@ -30,8 +30,17 @@ void plat_progress(unsigned percent);
 /* Input: virtual keys, KEYD_A + i, see i_system_jt5295.c. */
 void plat_input_init(void);
 
-/* Sound mixer; called from plat_poll. */
+/* Sound mixer; called from plat_poll. plat_audio_suspend(1) stops the DAC and keeps the mixer quiet until plat_audio_suspend(0). */
 void plat_audio_poll(void);
+void plat_audio_suspend(int suspend);
+
+/* Dark message box with two text lines and an optional progress bar (percent < 0: none) drawn over the frame that is currently in the
+ * plane set, shown immediately. Both plane sets then hold the same picture, so the box can be redrawn (progress) without the frame
+ * flickering back. The next engine frame overwrites the box. Used for print feedback. */
+void plat_overlay_show(const char *line1, const char *line2, int percent);
+
+/* Make the 35 Hz game clock forget the time that passed (a blocking print): without it the engine would run all the missed tics at once. */
+void plat_time_resync(void);
 
 /* The WAD. */
 int plat_load_wad(void);

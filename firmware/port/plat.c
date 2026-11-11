@@ -2,7 +2,7 @@
  * plat.c - polling, frame planes and the boot/error text screen.
  *
  * The display takes NV21 planes by DMA (apx_display_blit_nv21): a luma plane and an interleaved V,U plane, 32-byte
- * aligned, pitch 224. Two plane sets are used alternately so the engine can start the next frame while the previous
+ * aligned, pitch BOARD_NV21_PITCH (224 on the Action, 320 on the Silvergear). Two plane sets are used alternately so the engine can start the next frame while the previous
  * one is still being sent. The engine's 8-bit palette frame is turned into planes in i_system_jt5295.c.
  */
 #include <stdio.h>
@@ -64,17 +64,18 @@ void plat_display_clear(void)
 }
 
 /* Queue the current plane set and switch to the other one. Waits (polling) while the previous DMA is still running. */
-void plat_present(void)
+int plat_present(void)
 {
     uint32_t t0 = apx_ticks();
     while (apx_display_blit_nv21(0, 0, BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT, plane_y[cur], plane_vu[cur], PITCH) != 0) {
         plat_poll();
         if (apx_deadline_expired(t0 + 3277u)) {    /* 100 ms: drop the frame rather than hang */
             if (apx_display_status() == APX_DISPLAY_ERROR) apx_display_init();
-            return;
+            return 0;
         }
     }
     cur ^= 1u;
+    return 1;
 }
 
 /* ------------------------------------------------------------------ text screen */
@@ -127,7 +128,7 @@ void plat_status(const char *l1, const char *l2, const char *l3, int error)
     }
     const char *lines[3] = { l1, l2, l3 };
     for (unsigned i = 0; i < 3; i++)
-        if (lines[i]) draw_text(6, 40 + i * 24, lines[i], 255);
+        if (lines[i]) draw_text(BOARD_TEXT_X, BOARD_TEXT_Y + i * BOARD_TEXT_STEP, lines[i], 255);
     plat_present();
 }
 
@@ -135,10 +136,45 @@ void plat_progress(unsigned percent)
 {
     if (percent > 100) percent = 100;
     uint8_t *p = plane_y[cur];
-    for (unsigned y = 130; y < 140; y++)
-        for (unsigned x = 10; x < 210; x++) {
-            int edge = (y == 130 || y == 139 || x == 10 || x == 209);
-            p[y * PITCH + x] = edge || (x - 11) < percent * 198u / 100u ? 255 : 0;
+    for (unsigned y = BOARD_BAR_Y; y < BOARD_BAR_Y + BOARD_BAR_H; y++)
+        for (unsigned x = BOARD_BAR_X; x < BOARD_BAR_X + BOARD_BAR_W; x++) {
+            int edge = (y == BOARD_BAR_Y || y == BOARD_BAR_Y + BOARD_BAR_H - 1 || x == BOARD_BAR_X || x == BOARD_BAR_X + BOARD_BAR_W - 1);
+            p[y * PITCH + x] = edge || (x - BOARD_BAR_X - 1) < percent * (BOARD_BAR_W - 2u) / 100u ? 255 : 0;
         }
     plat_present();
+}
+
+/* ------------------------------------------------------------------ message box over the game frame */
+
+void plat_overlay_show(const char *l1, const char *l2, int percent)
+{
+    const unsigned bw = 264u, bh = 72u;
+    const unsigned bx = ((BOARD_LCD_WIDTH - bw) / 2u) & ~1u, by = ((BOARD_LCD_HEIGHT - bh) / 2u) & ~1u;
+    uint8_t *y = plane_y[cur], *vu = plane_vu[cur];
+
+    for (unsigned r = by; r < by + bh; r++) {
+        const int border_row = (r < by + 2u || r >= by + bh - 2u);
+        memset(y + r * PITCH + bx, border_row ? 255 : 0x10, bw);
+        if (!border_row) {
+            y[r * PITCH + bx] = y[r * PITCH + bx + 1] = 255;
+            y[r * PITCH + bx + bw - 1u] = y[r * PITCH + bx + bw - 2u] = 255;
+        }
+    }
+    for (unsigned r = by / 2u; r < (by + bh) / 2u; r++) memset(vu + r * PITCH + bx, 128, bw);   /* neutral chroma */
+
+    if (l1) draw_text(bx + 12u, by + 10u, l1, 255);
+    if (l2) draw_text(bx + 12u, by + 30u, l2, 200);
+    if (percent >= 0) {
+        if (percent > 100) percent = 100;
+        const unsigned x0 = bx + 12u, w = bw - 24u, y0 = by + 54u, h = 9u;
+        for (unsigned r = y0; r < y0 + h; r++)
+            for (unsigned x = x0; x < x0 + w; x++) {
+                const int edge = (r == y0 || r == y0 + h - 1u || x == x0 || x == x0 + w - 1u);
+                y[r * PITCH + x] = (edge || (x - x0 - 1u) < (unsigned)percent * (w - 2u) / 100u) ? 255 : 0x10;
+            }
+    }
+    if (plat_present()) {           /* the set that was just shown becomes the base of the next redraw */
+        memcpy(plane_y[cur], plane_y[cur ^ 1u], sizeof plane_y[0]);
+        memcpy(plane_vu[cur], plane_vu[cur ^ 1u], sizeof plane_vu[0]);
+    }
 }

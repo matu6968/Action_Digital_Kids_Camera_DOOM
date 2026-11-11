@@ -74,9 +74,10 @@ endif
 # Engine: everything except the GBA-only IWAD blob and the Maxmod audio layer (replaced by port/i_sound_jt5295.c).
 ENGINE_SKIP := $(GBA)/source/doom_iwad.c $(GBA)/source/i_audio.c
 ENGINE_SRCS := $(filter-out $(ENGINE_SKIP),$(wildcard $(GBA)/source/*.c))
-# Board-specific port files: input_<board>.c is the key mapping, print_<board>.c the print feature (stub where there is no printer).
+# Board-specific port files: input_<tag>.c is the key mapping (exactly one is built).
+BOARD_TAG   := $(if $(filter silvergear-3222882,$(BOARD)),silvergear,action)
 PORT_ALL    := $(wildcard $(PORT)/*.c) $(wildcard $(PORT)/*.S)
-PORT_SRCS   := $(PORT_ALL)
+PORT_SRCS   := $(filter-out $(PORT)/input_%.c,$(PORT_ALL)) $(PORT)/input_$(BOARD_TAG).c
 DOOM_OBJS   := $(patsubst %,$(BUILD)/doom/%.o,$(notdir $(ENGINE_SRCS) $(PORT_SRCS)))
 VPATH       := $(GBA)/source:$(PORT)
 
@@ -93,7 +94,8 @@ SDKDEFS := -DAPX_NO_STORAGE_COMMAND -DAPX_BUILD_ID='"$(BUILD_ID)"' -DAPX_USB_VID
     -DAPX_CPU_MHZ=$(CPU_MHZ) -DAPX_SPI_TRACE=0 -DAPX_TRACE_KEEP_WDT=0 -DAPX_LAUNCH_SETTLE_TICKS=0 -DAPX_LAUNCH_TRACE_MODE=0 \
     -DAPX_NO_CACHE_ENABLE=0 -DAPX_USB_ENUM_TIMEOUT_TICKS=0 -DAPX_SPI_TRACE_RING_ONLY=0 -DAPX_LVGL_INSTRUMENT=0 \
     -DAPX_LAUNCH_READS=0 -DAPX_LAUNCH_WDT_STOP=0 '-DAPX_LAUNCH_READ_LIST=0xd800' \
-    -DAPX_USB_TINYUSB=1 -DAPX_USB_MSC=$(APX_USB_MSC) -DAPX_USB_UVC=0 -DAPX_USB_UAC=0
+    -DAPX_USB_TINYUSB=1 -DAPX_USB_MSC=$(APX_USB_MSC) -DAPX_USB_UVC=0 -DAPX_USB_UAC=0 \
+    -DAPX_ADC_SPARSE_POLL=1
 # src/tusb holds tusb_config.h; TinyUSB's own headers are -isystem so only our code is held to -Werror
 SDKINC  := -I$(SDK)/include -I$(SDK)/boards/$(BOARD) -I$(SDK)/third_party/fatfs -I$(SDK)/src/tusb -isystem $(TINYUSB)
 SDK_CFLAGS := -g $(OPT_SDK) $(COMMON) -Werror $(SDKINC) $(SDKDEFS)

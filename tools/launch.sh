@@ -24,19 +24,27 @@ case "${1:-}" in
 esac
 apx() { python3 -m apxtool "$@"; }
 
-# find the camera: 1908:3319 is both the BootROM loader (product "Video050Loader"/BLDR) and the SDK debug image
-port=""; kind=""
+# find the camera: 1908:3319 is both the BootROM loader (product "Video050Loader"/BLDR) and the SDK debug image.
+# With several cameras attached the script does not guess (an image for one board must never go to the other): set USB_PORT=5-1.
+port=""; kind=""; found=""
 for d in /sys/bus/usb/devices/*; do
   [ -f "$d/idVendor" ] || continue
   [ "$(cat "$d/idVendor")" = 1908 ] || continue
-  port=$(basename "$d"); prod=$(cat "$d/product" 2>/dev/null || true)
+  name=$(basename "$d")
+  found="$found $name($(cat "$d/product" 2>/dev/null || echo '?'))"
+  [ -z "${USB_PORT:-}" ] || [ "$name" = "$USB_PORT" ] || continue
+  [ -z "$port" ] || { echo "several cameras on USB:$found - set USB_PORT=<port> (e.g. USB_PORT=5-1)" >&2; exit 1; }
+  port=$name; prod=$(cat "$d/product" 2>/dev/null || true)
   case "$prod" in *SDK*) kind=sdk;; *BLDR*|*oader*) kind=loader;; *) kind=stock;; esac
-  break
 done
-[ -n "$port" ] || { echo "no 1908:xxxx camera found on USB" >&2; exit 1; }
+[ -n "$port" ] || { echo "no 1908:xxxx camera found on USB${USB_PORT:+ at port $USB_PORT}" >&2; exit 1; }
 echo "camera at USB port $port ($kind)"
 
 if [ "$kind" = sdk ]; then
+  # a running SDK image names its board: it must be the board of the manifest
+  want=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('board',''))" "$manifest")
+  have=$(apx debug --port "$port" info | python3 -c "import json,sys; print(json.load(sys.stdin).get('board',''))")
+  case "$have" in "$want"*) ;; *) echo "the camera at $port runs a '$have' image but the manifest is for '$want'" >&2; exit 1;; esac
   # back to the BootROM loader, then launch immediately: the loader gives up after ~3 s
   dev=$(apx debug --port "$port" bootrom | sed -n 's/.*ready at \(\/dev\/sg[0-9]*\).*/\1/p')
 else

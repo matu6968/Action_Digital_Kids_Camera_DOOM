@@ -1,14 +1,18 @@
 /*
- * i_system_jt5295.c - GBADoom's platform layer for the Action kids camera.
+ * i_system_jt5295.c - GBADoom's platform layer for the Action kids cameras (Vision and Silvergear).
  *
  * GBADoom keeps everything hardware dependent behind the *_e32 functions declared in i_system_e32.h. They are
  * implemented here, on top of the polled SDK in sdk/.
  *
  * Frame format: the engine renders 8-bit palette indices into an array of unsigned short, two identical indices per
- * word, so the 120-word-wide buffer is a 240x160 image. The panel is 220x176 landscape, so 10 pixels are cropped on each
- * side and 8 black rows are left above and below. The display is fed NV21 planes (luma + interleaved V,U at half
+ * word, so the 120-word-wide buffer is a 240x160 image. The display is fed NV21 planes (luma + interleaved V,U at half
  * resolution) which suits this engine well: pixels come in identical pairs, so one palette lookup gives the chroma
  * of a whole 2-pixel group and one halfword store writes two luma bytes.
+ *
+ *   Action Vision: the panel is 220x176 landscape, so 10 pixels are cropped on each side and 8 black rows are left above and
+ *                  below; the image is drawn 1:1.
+ *   Silvergear:    the panel is 320x240 landscape. The 120 distinct columns are scaled to 320 pixels (8 out per 3 in) and the
+ *                  160 rows to 216 (27 per 20), centred with black bars above and below (BOARD_SCALE_8_3).
  */
 #include <stdint.h>
 #include <string.h>
@@ -29,6 +33,8 @@
 #include "i_system_e32.h"
 
 #include "plat.h"
+#include "plat_input.h"
+#include "plat_print.h"
 #include "plat_video.h"
 
 #define SRC_WORDS   120u                       /* SCREENWIDTH: words per source row */
@@ -80,6 +86,60 @@ void I_SetPallete_e32(const byte *pallete)
 static uint32_t stat_frames, stat_t0, stat_tics;
 #endif
 
+#if BOARD_SCALE_8_3
+/* Silvergear: 120 source words -> 320 output pixels. Output pixel x shows source word floor(x * 3 / 8), i.e. every group of 3 words
+ * (w0 w1 w2) becomes the 8 pixels  w0 w0 w0 w1 | w1 w1 w2 w2  = 4 luma halfwords  [w0 w0] [w0 w1] [w1 w1] [w2 w2]  and 4 chroma
+ * halfwords  vu(w0) vu(w0) vu(w1) vu(w2)  (one V,U pair per 2 output pixels, taken from the left pixel). */
+#define SCALE_GROUPS (BOARD_LCD_WIDTH / 8u)
+
+static inline __attribute__((always_inline)) void scale_row(const uint16_t *s, uint16_t *dy, uint16_t *dc, int luma, int chroma)
+{
+    for (unsigned g = 0; g < SCALE_GROUPS; g++, s += 3, dy += 4, dc += 4) {
+        const unsigned i0 = s[0] & 0xffu, i1 = s[1] & 0xffu, i2 = s[2] & 0xffu;
+        if (luma) {
+            const uint16_t y0 = lut_y2[i0], y1 = lut_y2[i1];
+            dy[0] = y0;
+            dy[1] = (uint16_t)((y0 & 0x00ffu) | (y1 & 0xff00u));
+            dy[2] = y1;
+            dy[3] = lut_y2[i2];
+        }
+        if (chroma) {
+            dc[0] = lut_vu[i0];
+            dc[1] = lut_vu[i0];
+            dc[2] = lut_vu[i1];
+            dc[3] = lut_vu[i2];
+        }
+    }
+}
+
+/* Output row dy shows source row dy * 20 / 27. Built once. */
+static uint8_t row_map[BOARD_VIEW_HEIGHT];
+static unsigned row_map_ready;
+
+static void convert_scaled(const uint16_t *src, unsigned width, uint8_t *py, uint8_t *pvu)
+{
+    if (!row_map_ready) {
+        for (unsigned y = 0; y < BOARD_VIEW_HEIGHT; y++) row_map[y] = (uint8_t)(y * BOARD_DOOM_HEIGHT / BOARD_VIEW_HEIGHT);
+        row_map_ready = 1;
+    }
+    unsigned prev = ~0u;
+    for (unsigned y = 0; y < BOARD_VIEW_HEIGHT; y++) {
+        const unsigned sy = row_map[y];
+        const unsigned oy = y + BOARD_ORIGIN_Y;                 /* even offset: y and oy have the same parity */
+        uint16_t *dy = (uint16_t *)(py + oy * BOARD_NV21_PITCH);
+        uint16_t *dc = (uint16_t *)(pvu + (oy >> 1) * BOARD_NV21_PITCH);
+        const uint16_t *s = src + sy * width;
+        const int chroma = !(oy & 1u);
+        if (sy == prev) {                                       /* same source row as the output row above: copy its luma */
+            memcpy(dy, (uint8_t *)dy - BOARD_NV21_PITCH, BOARD_LCD_WIDTH);
+            if (chroma) scale_row(s, 0, dc, 0, 1);
+        } else if (chroma) scale_row(s, dy, dc, 1, 1);
+        else scale_row(s, dy, 0, 1, 0);
+        prev = sy;
+    }
+}
+#endif
+
 void I_FinishUpdate_e32(const byte *srcBuffer, const byte *pallete, const unsigned int width, const unsigned int height)
 {
     if (!srcBuffer) return;
@@ -89,6 +149,10 @@ void I_FinishUpdate_e32(const byte *srcBuffer, const byte *pallete, const unsign
     uint8_t *py = plat_plane_y();
     uint8_t *pvu = plat_plane_vu();
 
+#if BOARD_SCALE_8_3
+    (void)height;
+    convert_scaled(src, width, py, pvu);
+#else
     for (unsigned y = 0; y < height; y++) {
         const uint16_t *s = src + y * width + CROP_WORDS;
         uint16_t *dy = (uint16_t *)(py + (y + BOARD_ORIGIN_Y) * BOARD_NV21_PITCH);
@@ -104,6 +168,15 @@ void I_FinishUpdate_e32(const byte *srcBuffer, const byte *pallete, const unsign
                 dy[x] = lut_y2[s[x] & 0xffu];
         }
     }
+#endif
+#if BOARD_HAS_PRINTER
+    /* A requested print runs here, on the finished frame. It leaves a message box in the planes: convert the frame again over it. */
+    if (plat_print_service(src, width, lut_y2)) {
+#if BOARD_SCALE_8_3
+        convert_scaled(src, width, py, pvu);
+#endif
+    }
+#endif
     plat_present();
 
 #if DOOM_STATS
@@ -120,6 +193,9 @@ void I_FinishUpdate_e32(const byte *srcBuffer, const byte *pallete, const unsign
 
 /* ------------------------------------------------------------------ time: 35 tics per second from the 32.768 kHz counter */
 
+static volatile unsigned time_resync;
+void plat_time_resync(void) { time_resync = 1; }
+
 int I_GetTime_e32(void)
 {
     static uint32_t last, acc;
@@ -127,6 +203,7 @@ int I_GetTime_e32(void)
     static uint32_t last_poll;
 
     const uint32_t now = apx_ticks();
+    if (time_resync) { time_resync = 0; last = now; acc = 0; }      /* skip the time a blocking job (printing) took */
     /* Poll the SDK about once a millisecond: USB, buttons (20 ms debounce, wants a poll at least every 5 ms), display DMA. */
     if (now - last_poll >= 33u) { last_poll = now; plat_poll(); }
 
@@ -141,25 +218,10 @@ int I_GetTime_e32(void)
 
 /* ------------------------------------------------------------------ input
  *
- * Five keys (SHUTTER, UP, DOWN, LEFT, RIGHT) share one ADC resistor ladder, so only one of them is ever seen at a time.
- * POWER is a separate digital input and can be combined with one of them. Mapping to GBADoom's GBA keys:
- *
- *   SHUTTER                 B      fire
- *   UP / DOWN / LEFT / RIGHT       walk and turn (menus: navigate)
- *   POWER + LEFT / RIGHT    L / R  strafe
- *   POWER + UP / DOWN       A+R / A+L   next / previous weapon
- *   POWER, tap              A      use / open / menu "enter"
- *   POWER, hold 0.65 s      START  menu
- *   POWER, hold 3 s         power the camera off
+ * The key mapping is per board (input_action.c, input_silvergear.c): they build a mask of GBADoom's virtual keys and pass it to
+ * plat_post_keys(), which posts the events for what changed since the previous call.
  */
-#define KBIT(k) (1u << ((k) - KEYD_A))
-
 static uint16_t keys_prev;
-static uint32_t power_down_ms;
-static unsigned power_state;        /* 0 idle, 1 held (candidate tap), 2 held and consumed (modifier / menu sent) */
-static unsigned power_armed;        /* the press that powered the camera on is ignored until it is released */
-static uint32_t pulse_until;        /* timed virtual key (tap) */
-static uint16_t pulse_keys;
 
 /* Development hook: tools/keys.py writes a bit mask (bit 0 = KEYD_A ... bit 9 = KEYD_SELECT) and the magic word, which makes the
  * game drivable from the host (menus, level start, movement) without touching the camera. Compiled in with DOOM_STATS. */
@@ -167,83 +229,33 @@ static uint16_t pulse_keys;
 volatile uint32_t doom_host_keys_magic;
 volatile uint32_t doom_host_keys;
 #define HOST_KEYS_MAGIC 0x5359454bu    /* "KEYS" */
+uint16_t plat_host_keys(void)
+{
+    return doom_host_keys_magic == HOST_KEYS_MAGIC ? (uint16_t)(doom_host_keys & 0x3ffu) : 0;
+}
+#else
+uint16_t plat_host_keys(void) { return 0; }
 #endif
 
-void plat_input_init(void)
+void plat_keys_reset(void) { keys_prev = 0; }
+
+void plat_post_keys(uint16_t keys)
 {
-    keys_prev = 0;
-    power_state = 0;
-    power_armed = 0;
-    pulse_until = 0;
-    pulse_keys = 0;
+    const uint16_t changed = keys ^ keys_prev;
+    if (!changed) return;
+    for (unsigned k = KEYD_A; k <= KEYD_SELECT; k++) {
+        if (changed & KBIT(k)) {
+            event_t ev;
+            ev.type = (keys & KBIT(k)) ? ev_keydown : ev_keyup;
+            ev.data1 = (int)k;
+            D_PostEvent(&ev);
+        }
+    }
+    keys_prev = keys;
 }
 
 void I_StartWServEvents_e32(void) { }
 void I_PollWServEvents_e32(void)  { }
-
-void I_ProcessKeyEvents(void)
-{
-    struct apx_buttons_info bi;
-    apx_buttons_get_info(&bi);
-    const uint32_t s = bi.state;
-    const uint32_t now = plat_ms();
-    const int power = (s & APX_BUTTON_POWER) != 0;
-    uint16_t keys = 0;
-
-    if (!power) power_armed = 1;
-
-    if (power && power_armed) {
-        if (power_state == 0) { power_state = 1; power_down_ms = now; }
-        const uint32_t held = now - power_down_ms;
-        if (s & (APX_BUTTON_LEFT | APX_BUTTON_RIGHT | APX_BUTTON_UP | APX_BUTTON_DOWN | APX_BUTTON_SHUTTER)) power_state = 2;
-        if (s & APX_BUTTON_LEFT)  keys |= KBIT(KEYD_L);
-        if (s & APX_BUTTON_RIGHT) keys |= KBIT(KEYD_R);
-        if (s & APX_BUTTON_UP)    keys |= KBIT(KEYD_A) | KBIT(KEYD_R);
-        if (s & APX_BUTTON_DOWN)  keys |= KBIT(KEYD_A) | KBIT(KEYD_L);
-        if (s & APX_BUTTON_SHUTTER) keys |= KBIT(KEYD_B);
-        if (power_state == 1 && held >= BOARD_POWER_MENU_MS) {
-            power_state = 3;                           /* menu sent; keep counting towards power-off */
-            pulse_keys = KBIT(KEYD_START); pulse_until = now + 120u;
-        }
-        if (power_state == 3 && held >= BOARD_POWER_OFF_MS) {
-            printf("power off requested\n");
-            (void)apx_power_off();
-        }
-    } else {
-        if (power_state == 1 && power_armed) {         /* released before the menu threshold, nothing else pressed: tap */
-            if (now - power_down_ms < BOARD_POWER_TAP_MS) { pulse_keys = KBIT(KEYD_A); pulse_until = now + 120u; }
-        }
-        power_state = 0;
-        if (s & APX_BUTTON_SHUTTER) keys |= KBIT(KEYD_B);
-        if (s & APX_BUTTON_UP)      keys |= KBIT(KEYD_UP);
-        if (s & APX_BUTTON_DOWN)    keys |= KBIT(KEYD_DOWN);
-        if (s & APX_BUTTON_LEFT)    keys |= KBIT(KEYD_LEFT);
-        if (s & APX_BUTTON_RIGHT)   keys |= KBIT(KEYD_RIGHT);
-    }
-
-    /* Only the plain direction keys are suppressed while POWER is down; in the POWER branch above they were remapped. */
-    if (pulse_until) {
-        if ((int32_t)(now - pulse_until) >= 0) pulse_until = 0, pulse_keys = 0;
-        else keys |= pulse_keys;
-    }
-
-#if DOOM_STATS
-    if (doom_host_keys_magic == HOST_KEYS_MAGIC) keys |= (uint16_t)(doom_host_keys & 0x3ffu);
-#endif
-
-    const uint16_t changed = keys ^ keys_prev;
-    if (changed) {
-        for (unsigned k = KEYD_A; k <= KEYD_SELECT; k++) {
-            if (changed & KBIT(k)) {
-                event_t ev;
-                ev.type = (keys & KBIT(k)) ? ev_keydown : ev_keyup;
-                ev.data1 = (int)k;
-                D_PostEvent(&ev);
-            }
-        }
-        keys_prev = keys;
-    }
-}
 
 /* ------------------------------------------------------------------ errors and exit */
 

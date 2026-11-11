@@ -130,9 +130,18 @@ static void mix_block(int16_t *dst)
     }
 }
 
+static unsigned audio_suspended;
+
+/* A blocking job (the thermal printer) wants the DAC quiet: stop the stream, and keep plat_audio_poll() from restarting it. */
+void plat_audio_suspend(int suspend)
+{
+    audio_suspended = suspend != 0;
+    if (suspend && sound_ready) apx_audio_stop();
+}
+
 void plat_audio_poll(void)
 {
-    if (!sound_ready) return;
+    if (!sound_ready || audio_suspended) return;
 
     if (!apx_audio_stream_active()) {
         /* start, or restart after the DAC ran dry */

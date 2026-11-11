@@ -5,6 +5,7 @@
   keys.py hold UP --ms 1500      # keep a key down for 1.5 s
   keys.py hold UP B --ms 800     # chord
   keys.py seq "START,wait:300,A,A"   # taps with waits in ms
+  add --board silvergear-3222882 (and --port) for the Silvergear build
 
 Keys: A B L R UP DOWN LEFT RIGHT START SELECT (A = use/enter, B = fire, L/R = strafe, START = menu).
 """
@@ -26,9 +27,12 @@ def main():
     ap.add_argument('mode', choices=['tap', 'hold', 'seq', 'release'])
     ap.add_argument('keys', nargs='*')
     ap.add_argument('--ms', type=int, default=120)
-    ap.add_argument('--elf', type=Path, default=Path(__file__).resolve().parents[1] / 'firmware/build/doom.elf')
+    ap.add_argument('--board', choices=('action-vision', 'silvergear-3222882'), default='action-vision')
+    ap.add_argument('--elf', type=Path, help="ELF of the running build (default: the board's build)")
     ap.add_argument('--port')
     a = ap.parse_args()
+    if a.elf is None:
+        a.elf = Path(__file__).resolve().parents[1] / ('firmware/build/doom.elf' if a.board == 'action-vision' else f'firmware/build/{a.board}/doom.elf')
     with open(a.elf, 'rb') as f:
         tab = ELFFile(f).get_section_by_name('.symtab')
         magic = tab.get_symbol_by_name('doom_host_keys_magic')[0]['st_value']

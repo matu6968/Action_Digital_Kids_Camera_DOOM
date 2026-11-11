@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Save what the camera is showing as a PNG, read from the firmware's NV21 frame planes over USB.
 
-  screenshot.py out.png [--elf firmware/build/doom.elf] [--port 7-1]
+  screenshot.py out.png [--board silvergear-3222882] [--elf firmware/build/doom.elf] [--port 7-1]
 
 Needs the ELF of the running build for the plane addresses (the symbols plane_y / plane_vu / cur in port/plat.c).
 The plane set that was sent last is saved; the one being drawn is skipped.
@@ -16,7 +16,11 @@ from apxtool.debug import DebugClient, USBTransport  # noqa: E402
 from elftools.elf.elffile import ELFFile              # noqa: E402
 from PIL import Image                                  # noqa: E402
 
-PITCH, W, H = 224, 220, 176
+# board -> (plane pitch, width, height, ELF of that build); must match boards/<board>/doom_board.h
+BOARDS = {
+    'action-vision': (224, 220, 176, 'firmware/build/doom.elf'),
+    'silvergear-3222882': (320, 320, 240, 'firmware/build/silvergear-3222882/doom.elf'),
+}
 
 
 def symbols(elf_path, names):
@@ -29,9 +33,13 @@ def symbols(elf_path, names):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('png', type=Path)
-    ap.add_argument('--elf', type=Path, default=Path(__file__).resolve().parents[1] / 'firmware/build/doom.elf')
+    ap.add_argument('--board', choices=sorted(BOARDS), default='action-vision')
+    ap.add_argument('--elf', type=Path, help='ELF of the running build (default: the board\'s build)')
     ap.add_argument('--port')
     a = ap.parse_args()
+    PITCH, W, H, elf = BOARDS[a.board]
+    if a.elf is None:
+        a.elf = Path(__file__).resolve().parents[1] / elf
     sym = symbols(a.elf, ['plane_y', 'plane_vu', 'cur'])
     with USBTransport(port=a.port, timeout_ms=5000) as t:
         c = DebugClient(t)

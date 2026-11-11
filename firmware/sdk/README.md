@@ -11,6 +11,7 @@ Built here as-is except for the changes below, each marked in the source. TinyUS
 |---|---|
 | `src/audio.c`, `include/appotech/audio.h` | gapless streaming: `apx_audio_stream_start/queue/ready/active/underruns` using the DAC DMA's one-deep next-block queue (not in the upstream SDK) |
 | `src/storage.c` | `APX_NO_STORAGE_COMMAND` leaves out the host SD/FatFs command set (15 KiB of the runtime window); `f_setcp` is compiled out when `FF_CODE_PAGE` is not 0 |
+| `src/adc.c` | `APX_ADC_SPARSE_POLL` (set by the DOOM Makefile; default 0 = unchanged): `apx_adc_begin()` waits the two settle ticks itself and `apx_adc_result()` returns a finished conversion before it checks the 5 ms deadline. The engine polls the SDK once per ~28 ms frame, and the stock driver needs three polls a tick apart per sample, so without this every sample times out and no key is ever read (`debug gpio info`: `adc 65535`, `adc_timeouts` rising) |
 | `third_party/fatfs/ffconf.h` | `FF_CODE_PAGE 437` instead of the all-codepage build (saves a 483 KB table) |
 
 These were carried over from the previous vendored SDK. Three older changes are now upstream and were dropped: the UART CR+LF mirror

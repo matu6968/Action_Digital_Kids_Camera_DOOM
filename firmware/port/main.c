@@ -59,7 +59,7 @@ int main(void)
     boot_trail("DOOM: engine state cleared");
     apx_buttons_init();
     apx_display_init();
-    printf("DOOM for the Action kids camera, build %s\n", APX_BUILD_ID);
+    printf("DOOM for the %s, build %s\n", BOARD_NAME, APX_BUILD_ID);
 
     plat_display_init();     /* waits for the panel */
     boot_trail("DOOM: display ready");
