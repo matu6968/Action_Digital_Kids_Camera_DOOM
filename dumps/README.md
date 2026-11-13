@@ -2,8 +2,9 @@
 
 | File | What it is |
 |---|---|
-| `flash.bin` | The full 2 MiB SPI flash of the author's camera: the stock firmware, with the user-saved photos removed (SHA-256 `2d0d864f...`). Restoring it brings the camera back to stock, and the SPI image packer builds on it. |
+| `flash.bin` | The full 2 MiB SPI flash of the author's Vision camera: the stock firmware, with the user-saved photos removed (SHA-256 `2d0d864f...`). Restoring it brings the camera back to stock, and the SPI image packer builds on it. |
 | `bootrom_0x00100000_64K.bin` | The 64 KB BootROM, read through the loader at `0x00100000` (SHA-256 `f5b68ff4...`). |
+| `stock-silvergear.bin` | The full 4 MiB SPI flash of the author's Silvergear camera: the stock firmware, with no user photos present as it came from the factory (SHA-256 `4874af74...`). Restoring it brings the camera back to stock, and the SPI image packer builds on it. |
 
 ## `flash.bin`: user photos removed
 

@@ -1,13 +1,10 @@
 # DOOM on two Action digital camera's for kids
 
-<img src="images/doom-ingame-on-hardware.jpg" width="440" alt="DOOM running on the camera">
+<img src="images/doom-ingame-on-hardware.jpg" width="440" alt="DOOM running on both cameras">
 
 DOOM running on two cheap digital cameras for kids sold by the Dutch discounter Action. No hardware modifications - the
 stock firmware is replaced over the USB port already on the board, and it can be put back the same way.
 
-<!-- TODO: photo of the real device + video link
-<img src="images/doom-ingame-on-hardware.jpg" width="440" alt="DOOM running on the camera">
--->
 <!-- TODO: CI badge and releawithses page, once the repository has a remote -->
 
 Both are built around the same undocumented **JT5295** QFN64 SoC. There is no datasheet and no vendor documentation for
@@ -32,10 +29,9 @@ reading and writing addresses and, importantly, executing code over USB. See [do
 | | |
 |---|---|
 | <img src="images/action-kids-camera-listing.png" width="330" alt="Action Vision kids camera shop listing"> | <img src="images/action-silvergear-kids-camera-listing.png" width="330" alt="Action Silvergear kids camera shop listing"> |
+| <img src="images/store-shelf.jpg" width="420" alt="Vision camera on the shelf at Action"> | <img src="images/store-shelf-silvergear.jpg" width="420" alt="Sivergear camera on the shelf at Action"> |
 
-<img src="images/store-shelf.jpg" width="420" alt="The camera on the shelf at Action">
-
-*Where it starts - the camera in different colours sitting on the same shelf.*
+*Where it starts - both cameras in different colours sitting on the same shelf.*
 
 ---
 
@@ -65,8 +61,7 @@ reading and writing addresses and, importantly, executing code over USB. See [do
 * The screen wipe looks wrong (front and back buffer share memory).
 * Only one map: the WAD is trimmed to E1M1 plus what the menus need (1.48 MB), see [wad/README.md](wad/README.md).
 * The SD card is only *read*. Nothing in this project writes to it.
-* The Silvergear's cold-boot image has been tested on one camera only (WAD from flash, no SD card); the Vision's has not been cold-booted since
-  the SDK update (see [docs/FLASHING.md](docs/FLASHING.md)).
+* The cold-boot images have each been tested on one camera only (see [docs/FLASHING.md](docs/FLASHING.md)).
 * Printing stops the game for about 15 seconds, and it is slower than the stock firmware's print (see [Printing](#printing-silvergear)).
 
 ---
@@ -81,13 +76,13 @@ reading and writing addresses and, importantly, executing code over USB. See [do
 |---|---|
 | Core | **OpenRISC** ORBIS32, little endian, **no branch delay slots** (a taken jump skips the next instruction), calls link to PC+4. Needs a patched GCC, see [docs/TOOLCHAIN.md](docs/TOOLCHAIN.md) |
 | RAM | 4 MiB DDR at `0x02000000`, cached |
-| Flash | 25Q16 (JEDEC `5E4015`), 2 MiB on the Vision; 4 MiB (JEDEC `944016`) on the Silvergear. **Not memory mapped**: the BootROM copies one block into RAM, everything runs from RAM |
+| Flash | 25Q16 (JEDEC `5E4015`), 2 MiB on the Vision; 25Q32A (JEDEC `944016`), 4 MiB on the Silvergear. **Not memory mapped**: the BootROM copies one block into RAM, everything runs from RAM |
 | BootROM | 64 KB on chip, speaks AppoTech's USB SCSI command set; forces a recovery mode (`1908:3319`) if the flash is bad |
 | Clock | ~96 MHz from the loader, **144 MHz** after the SDK's PLL switch (inferred from a 32.768 kHz crystal reference) |
 | Display | ILI9225G (Vision) or ST7789 (Silvergear), fed NV21 planes by DMA (the Vision through a YUV-to-RGB compositor) |
 | SD | SD controller, 24 MHz, high-speed mode; the SDK probes 4-bit on the Vision and falls back to 1-bit. The Silvergear stays 1-bit: DAT1-3 would be the printer motor and camera power pins |
 | Audio | 16-bit DAC with a DMA that has a one-deep "next block" queue |
-| Power | rechargeable 200 mAh battery behind a power-management chip that needs a stock sequence on every cold boot |
+| Power | rechargeable 200 mAh (Vision) or 1500 mAh (Silvergear) battery behind a power-management chip that needs a stock sequence on every cold boot |
 
 The chip is *not* an STM32 or an ACM32 (that was the other console's SoC); nothing in an ARM SDK applies. Full details in
 [docs/HARDWARE.md](docs/HARDWARE.md).
@@ -232,11 +227,10 @@ tools/install.sh build-spi/doom.spi.bin
 `install.sh` launches the flash driver over USB, **reads the whole chip into a backup first**, and only writes after you type
 `install`. **Read [docs/FLASHING.md](docs/FLASHING.md) before you do this**, especially the part about getting back.
 
-> [!WARNING]
-> The Vision image is built on the new SDK (TinyUSB, new SD driver) and **has not been cold-booted on a Vision yet**. The SDK itself has
-> run TinyUSB images from RAM on the Vision but has never cold-booted one from SPI there (it has on the Silvergear). The USB start-up
-> sequence is the same as the old driver's, and a camera that does not start is recoverable (see FLASHING.md), but take the backup and
-> keep the BootROM method in mind.
+> [!NOTE]
+> The Vision image (new SDK, TinyUSB) was installed and cold-booted on one Vision on 2026-11-11 (WAD from the SD card) and the camera was then put
+> back to its original firmware with `debug flash install dumps/flash.bin`. It is the SDK's first TinyUSB cold boot on a Vision, so take the backup
+> (`install.sh` does) and keep the BootROM method in mind.
 
 For the **Silvergear** use its own script (it reads the whole 4 MiB chip twice, packs the image on top of that read, shows the hashes and
 asks before it writes). The camera has to be running an SDK image on USB (a DOOM launched with `tools/launch.sh` is one):

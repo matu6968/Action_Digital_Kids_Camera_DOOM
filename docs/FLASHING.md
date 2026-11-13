@@ -26,7 +26,7 @@ before it writes and refuses to continue unless that read is complete, so you al
 > [!NOTE]
 > Dissassembly is required for the Silvergear camera to force it into BootROM mode; in the stock firmware the camera will not accept entering into MSC mode 
 > for the BootROM entrypoint as it will shut off immediately and refuse to power on when USB power is present.
-> See [Silvergear flashing instructions](#silvergear) for more details.
+> See [Silvergear flashing instructions](FLASHING.md#silvergear) for more details.
 
 ### Vision
 
@@ -44,9 +44,11 @@ engine is loaded to `0x022e0000`, where the stock firmware leaves data, and the 
 asked. It first saves that 1.1 MB to `jpeg-ram-before-*.bin` next to the manifest (disposable). `apxtool: SDK reservation at 0x22e0000
 is occupied` means you left it out. When the camera already runs an SDK image (a previous DOOM) it is not needed.
 
-### Silvergear (or fallback method for Vision)
+### Silvergear
 
-To run custom firmware on the Silvergear camera, dissassembly is required (however no soldering is needed), see [DISSASEMBLY.md](DISSASEMBLY.md) on how to open the camera.
+This method can also be used on the Vision camera if flashing were to go wrong.
+
+To run custom firmware on the Silvergear camera, dissassembly is required (however no soldering is needed), see [DISASSEMBLY.md](DISASSEMBLY.md) on how to open the camera.
 
 Once open, find the SPI flash (`NM25Q32A` for Silvergear or `25Q16ETJG` for Vision, 8 pins, next to the SoC). **Pins 2 and 3** are `DO` and `/WP` on the standard 25Qxx pinout.
 
@@ -95,10 +97,15 @@ tools/bot.py 120                             # god mode + random walk for two mi
 
 The Vision and the Silvergear have different flash layouts, so they have different scripts and images. Vision first, Silvergear [below](#silvergear-cold-boot).
 
-> [!WARNING]
-> **The Vision image is built on the new SDK and has not been cold-booted yet.** The SDK has run TinyUSB from RAM on the Vision but, by its
-> own notes, never cold-booted a TinyUSB image from SPI there (it has on the Silvergear). The packed image is byte-identical between the
-> old and the new packer, but that says nothing about the new runtime. Take the backup, and keep step 5 in mind.
+> [!NOTE]
+> **Status (2026-11-11):** the Vision image built on the new SDK (TinyUSB, new SD driver) was installed with `tools/install.sh` on one Vision, started
+> from SPI (a host `debug system reboot`, then the owner's cold boot from the battery: keys, sound and POWER power-off all fine, the WAD read from the SD
+> card and a fallback SPI path tested later) and the camera was afterwards put back to its original firmware with the command below; the chip read back identical to `dumps/flash.bin`. It was
+> the SDK's first TinyUSB cold boot on a Vision.
+> Take a backup, and keep step 5 in mind.
+
+`install.sh` accepts `USB_PORT=<port>` (several cameras attached) and `EXPECT_CHIP_SHA256=<hash>` (stop unless the chip read has exactly that hash). If the
+camera still holds the stock image of `dumps/flash.bin` you can compare its hash with `2d0d864f...` before you start.
 
 ```sh
 python3 tools/spi_pack.py --original dumps/flash.bin --manifest firmware/build/doom.manifest.json \
@@ -177,7 +184,7 @@ or, with the camera running a DOOM/SDK image over USB, `python3 -m apxtool debug
 A bad image can leave the camera black: no stock firmware, no USB. The BootROM is in the chip, not in the flash, so it is still
 there. Forcing it:
 
-1. Open the camera (see [DISSASEMBLY.md](DISSASEMBLY.md) on how to open either cameras).
+1. Open the camera (see [DISASSEMBLY.md](DISASSEMBLY.md) on how to open either cameras).
 2. Find the SPI flash (`25Q16ETJG`, 8 pins, next to the SoC). **Pins 2 and 3** are `DO` and `/WP` on the standard 25Qxx pinout.
 3. Hold RESET (or disconnect the battery), short pins 2 and 3 with tweezers, release RESET after a few seconds, and hold POWER for about a second.
 4. Release the short **as soon as BLDR shows (`lsusb` lists `1908:3319 BLDR v1.00`)** - the loader needs the flash. Do not leave the camera idle: the loader's watchdog
